@@ -8,16 +8,13 @@ import decimal
 class BudgetGoalsWindow:
     """Window for managing category budget goals."""
     
-    def __init__(self, parent: ttk.Frame, db: Database):
-        """Initialize the budget goals interface.
-        
-        Args:
-            parent: Parent frame (tab) to contain the budget goals UI
-            db: Database instance
-        """
+    def __init__(self, parent: ttk.Frame, db: Database) -> None:
+        """Initialize the budget goals window."""
         self.parent = parent
         self.db = db
         self.category_entries = {}
+        
+        # Initialize sort variables
         self.sort_var = tk.StringVar(value="name")
         self.sort_direction_var = tk.StringVar(value="asc")
         
@@ -44,6 +41,38 @@ class BudgetGoalsWindow:
             command=self._add_new_category
         ).pack(side="right", padx=5)
         
+        # Sort controls frame
+        sort_frame = ttk.LabelFrame(self.parent, text="Sort Options")
+        sort_frame.pack(fill="x", padx=10, pady=5)
+
+        # Sort by options
+        sort_by_frame = ttk.Frame(sort_frame)
+        sort_by_frame.pack(side="left", padx=5, pady=5)
+
+        ttk.Label(sort_by_frame, text="Sort by:").pack(side="left", padx=5)
+        for text, value in [("Name", "name"), ("Goal", "goal"), ("Tags", "tags")]:
+            ttk.Radiobutton(
+                sort_by_frame,
+                text=text,
+                variable=self.sort_var,
+                value=value,
+                command=self._refresh_categories
+            ).pack(side="left", padx=5)
+
+        # Direction options
+        direction_frame = ttk.Frame(sort_frame)
+        direction_frame.pack(side="right", padx=5, pady=5)
+
+        ttk.Label(direction_frame, text="Order:").pack(side="left", padx=5)
+        for text, value in [("Ascending", "asc"), ("Descending", "desc")]:
+            ttk.Radiobutton(
+                direction_frame,
+                text=text,
+                variable=self.sort_direction_var,
+                value=value,
+                command=self._refresh_categories
+            ).pack(side="left", padx=5)
+
         # Create main frame for categories
         main_frame = ttk.Frame(self.parent)
         main_frame.pack(fill="both", expand=True, padx=10, pady=5)
@@ -178,11 +207,11 @@ class BudgetGoalsWindow:
         sort_by = self.sort_var.get()
         
         if sort_by == "name":
-            return sorted(categories, key=lambda x: x[0], reverse=reverse)
+            return sorted(categories, key=lambda x: x[0].lower(), reverse=reverse)
         elif sort_by == "goal":
             return sorted(categories, key=lambda x: x[1] if x[1] is not None else Decimal('0'), reverse=reverse)
         else:  # tags
-            return sorted(categories, key=lambda x: x[2] if x[2] else "", reverse=reverse)
+            return sorted(categories, key=lambda x: (x[2] or "").lower(), reverse=reverse)
 
     def _refresh_categories(self, *args) -> None:
         """Refresh the category list and their goals."""
