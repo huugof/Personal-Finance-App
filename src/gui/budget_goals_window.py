@@ -1,9 +1,10 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from decimal import Decimal, InvalidOperation
-from typing import Set, Dict, Optional, List
+from typing import Set, Dict, Optional, List, Tuple
 from database import Database
 import decimal
+from datetime import datetime
 
 class BudgetGoalsWindow:
     """Window for managing category budget goals."""
@@ -12,35 +13,52 @@ class BudgetGoalsWindow:
         """Initialize the budget goals window."""
         self.parent = parent
         self.db = db
-        self.category_entries = {}
+        self.category_entries: Dict[str, Tuple[ttk.Entry, ttk.Entry]] = {}
         
         # Initialize sort variables
         self.sort_var = tk.StringVar(value="name")
         self.sort_direction_var = tk.StringVar(value="asc")
         
-        print("\n=== Opening Budget Goals Window ===")
-        self.db.debug_print_categories()
-        
-        self._verify_database()
+        # Set up the UI components
         self._setup_ui()
+        
+        # Initial refresh of categories
         self._refresh_categories()
     
     def _setup_ui(self) -> None:
         """Set up the budget goals UI."""
-        # Add New Category section
-        add_frame = ttk.LabelFrame(self.parent, text="Add New Category")
-        add_frame.pack(fill="x", padx=10, pady=5)
+        # Create totals frame and labels
+        totals_frame = ttk.LabelFrame(self.parent, text="Budget Summary")
+        totals_frame.pack(fill="x", padx=10, pady=5)
+
+        # Budget Summary (First Row)
+        budget_frame = ttk.Frame(totals_frame)
+        budget_frame.pack(fill="x", padx=5, pady=2)
         
-        ttk.Label(add_frame, text="Category Name:").pack(side="left", padx=5)
-        self.new_category_entry = ttk.Entry(add_frame)
-        self.new_category_entry.pack(side="left", fill="x", expand=True, padx=5)
+        ttk.Label(budget_frame, text="Budget Goals:", font=("", 10, "bold")).pack(side="left", padx=5)
+        self.budget_income_label = ttk.Label(budget_frame, text="Income: $0.00")
+        self.budget_income_label.pack(side="left", padx=20)
         
-        ttk.Button(
-            add_frame,
-            text="Add Category",
-            command=self._add_new_category
-        ).pack(side="right", padx=5)
+        self.budget_expense_label = ttk.Label(budget_frame, text="Expenses: $0.00")
+        self.budget_expense_label.pack(side="left", padx=20)
         
+        self.budget_balance_label = ttk.Label(budget_frame, text="Balance: $0.00")
+        self.budget_balance_label.pack(side="left", padx=20)
+
+        # Actual Summary (Second Row)
+        actual_frame = ttk.Frame(totals_frame)
+        actual_frame.pack(fill="x", padx=5, pady=2)
+        
+        ttk.Label(actual_frame, text="Current Month:", font=("", 10, "bold")).pack(side="left", padx=5)
+        self.actual_income_label = ttk.Label(actual_frame, text="Income: $0.00")
+        self.actual_income_label.pack(side="left", padx=20)
+        
+        self.actual_expense_label = ttk.Label(actual_frame, text="Expenses: $0.00")
+        self.actual_expense_label.pack(side="left", padx=20)
+        
+        self.actual_balance_label = ttk.Label(actual_frame, text="Balance: $0.00")
+        self.actual_balance_label.pack(side="left", padx=20)
+
         # Sort controls frame
         sort_frame = ttk.LabelFrame(self.parent, text="Sort Options")
         sort_frame.pack(fill="x", padx=10, pady=5)
@@ -73,13 +91,9 @@ class BudgetGoalsWindow:
                 command=self._refresh_categories
             ).pack(side="left", padx=5)
 
-        # Create main frame for categories
-        main_frame = ttk.Frame(self.parent)
-        main_frame.pack(fill="both", expand=True, padx=10, pady=5)
-        
-        # Create canvas and scrollbar
-        self.canvas = tk.Canvas(main_frame)
-        scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=self.canvas.yview)
+        # Create scrollable frame for categories
+        self.canvas = tk.Canvas(self.parent)
+        scrollbar = ttk.Scrollbar(self.parent, orient="vertical", command=self.canvas.yview)
         self.scrollable_frame = ttk.Frame(self.canvas)
         
         # Configure grid columns in scrollable frame
@@ -87,7 +101,7 @@ class BudgetGoalsWindow:
         self.scrollable_frame.grid_columnconfigure(2, weight=1, minsize=200)  # Tags column
         self.scrollable_frame.grid_columnconfigure(3, minsize=50)  # Delete button column
         
-        # Headers with consistent widths
+        # Headers
         ttk.Label(self.scrollable_frame, text="Category", font=("", 10, "bold"), width=20).grid(
             row=0, column=0, padx=5, pady=5, sticky="w"
         )
@@ -97,44 +111,22 @@ class BudgetGoalsWindow:
         ttk.Label(self.scrollable_frame, text="Tags", font=("", 10, "bold"), width=30).grid(
             row=0, column=2, padx=5, pady=5, sticky="w"
         )
-        ttk.Label(self.scrollable_frame, text="", width=5).grid(  # Spacer for delete button column
-            row=0, column=3, padx=5, pady=5
-        )
         
         # Configure canvas
         self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
-        self.canvas.configure(yscrollcommand=scrollbar.set)  # Connect scrollbar to canvas
+        self.canvas.configure(yscrollcommand=scrollbar.set)
         
-        # Make the scrollable frame expand to canvas width
+        # Configure scrolling
         self.scrollable_frame.bind(
             "<Configure>",
             lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         )
         
-        # Bind macOS trackpad scrolling
-        def _on_scroll(event):
-            """Handle scrolling for macOS trackpad."""
-            if event.state & 0x1:  # Check if Shift key is held down
-                return  # Don't handle horizontal scrolling
-            
-            # Convert delta to scroll units (-1 or 1)
-            if event.delta:
-                delta = -1 if event.delta < 0 else 1
-                self.canvas.yview_scroll(-delta, "units")
-        
-        # Bind scroll events
-        self.canvas.bind("<MouseWheel>", _on_scroll)
-        self.scrollable_frame.bind("<MouseWheel>", _on_scroll)
-        
-        # Enable scrolling when mouse is over the canvas
-        self.canvas.bind('<Enter>', lambda e: self.canvas.bind_all("<MouseWheel>", _on_scroll))
-        self.canvas.bind('<Leave>', lambda e: self.canvas.unbind_all("<MouseWheel>"))
-        
         # Pack scrollbar and canvas
         scrollbar.pack(side="right", fill="y")
         self.canvas.pack(side="left", fill="both", expand=True)
         
-        # Save Button at bottom
+        # Save Button
         ttk.Button(
             self.parent,
             text="Save All Goals",
@@ -247,6 +239,8 @@ class BudgetGoalsWindow:
         # Add rows for each category
         for category, goal, tag in sorted_categories:
             self._add_category_row(category, goal, tag)
+        
+        self._update_totals()
     
     def _save_all_goals(self) -> None:
         """Save all category goals and tags."""
@@ -284,6 +278,7 @@ class BudgetGoalsWindow:
         self.db.debug_print_categories()
         
         if success_count > 0:
+            self._update_totals()
             messagebox.showinfo(
                 "Success",
                 f"Successfully saved {success_count} budget goals"
@@ -305,3 +300,95 @@ class BudgetGoalsWindow:
             
         except Exception as e:
             print(f"Database verification failed: {str(e)}") 
+
+    def _update_totals(self) -> None:
+        """Update the budget summary totals."""
+        # Calculate budget goals
+        total_budget_income = Decimal('0')
+        total_budget_expense = Decimal('0')
+        
+        # Get all category tags
+        category_tags = self.db.get_category_tags()
+        
+        for category, (goal_entry, _) in self.category_entries.items():
+            try:
+                goal_value = goal_entry.get().strip()
+                if goal_value:
+                    amount = Decimal(goal_value)
+                    # Check if category has "income" tag
+                    tags = category_tags.get(category, "").lower()
+                    if "income" in tags:
+                        total_budget_income += amount
+                    else:
+                        total_budget_expense += amount
+            except (InvalidOperation, ValueError):
+                continue
+
+        # Get current month's transactions
+        current_month = datetime.now().replace(day=1)
+        transactions = self.db.get_transactions_for_month(current_month)
+        
+        # Calculate actual totals
+        actual_income = sum(t.amount for t in transactions if t.is_income)
+        actual_expenses = sum(t.amount for t in transactions if t.is_expense)
+        
+        # Calculate balances
+        budget_balance = total_budget_income - total_budget_expense
+        actual_balance = actual_income - actual_expenses
+
+        # Update budget labels
+        self.budget_income_label.config(text=f"Income: ${total_budget_income:,.2f}")
+        self.budget_expense_label.config(text=f"Expenses: ${total_budget_expense:,.2f}")
+        self.budget_balance_label.config(text=f"Balance: ${budget_balance:,.2f}")
+
+        # Update actual labels
+        self.actual_income_label.config(text=f"Income: ${actual_income:,.2f}")
+        self.actual_expense_label.config(text=f"Expenses: ${actual_expenses:,.2f}")
+        self.actual_balance_label.config(text=f"Balance: ${actual_balance:,.2f}")
+
+    def _setup_sort_controls(self) -> None:
+        """Setup the sort controls frame."""
+        sort_frame = ttk.Frame(self.parent)
+        sort_frame.pack(fill="x", padx=10, pady=5)
+        
+        # Sort label
+        ttk.Label(sort_frame, text="Sort by:").pack(side="left", padx=5)
+        
+        # Sort options
+        self.sort_var = tk.StringVar(value="category")
+        sort_options = ttk.OptionMenu(
+            sort_frame,
+            self.sort_var,
+            "category",
+            "category",
+            "amount",
+            command=self._refresh_categories
+        )
+        sort_options.pack(side="left", padx=5)
+        
+        # Order options
+        self.order_var = tk.StringVar(value="asc")
+        ttk.Radiobutton(
+            sort_frame,
+            text="Ascending",
+            variable=self.order_var,
+            value="asc",
+            command=self._refresh_categories
+        ).pack(side="left", padx=5)
+        ttk.Radiobutton(
+            sort_frame,
+            text="Descending",
+            variable=self.order_var,
+            value="desc",
+            command=self._refresh_categories
+        ).pack(side="left", padx=5) 
+
+    def _on_frame_configure(self, event=None) -> None:
+        """Reset the scroll region to encompass the inner frame."""
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def _on_canvas_configure(self, event=None) -> None:
+        """When canvas is resized, resize the inner frame to match."""
+        if event:
+            canvas_width = event.width
+            self.canvas.itemconfig(self.canvas_window, width=canvas_width) 

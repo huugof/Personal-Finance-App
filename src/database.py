@@ -255,3 +255,38 @@ class Database:
             rows_affected = cursor.rowcount
             conn.commit()
             print(f"Rows affected by delete: {rows_affected}")  # Debug log 
+
+    def get_transactions_for_month(self, date: datetime) -> List[Transaction]:
+        """Get all transactions for a specific month.
+        
+        Args:
+            date: Any date in the target month
+            
+        Returns:
+            List of transactions for that month
+        """
+        start_date = date.replace(day=1).isoformat()
+        if date.month == 12:
+            end_date = date.replace(year=date.year + 1, month=1, day=1).isoformat()
+        else:
+            end_date = date.replace(month=date.month + 1, day=1).isoformat()
+        
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM transactions 
+                WHERE date >= ? AND date < ?
+                ORDER BY date
+            """, (start_date, end_date))
+            
+            return [
+                Transaction(
+                    id=row[0],
+                    date=datetime.fromisoformat(row[1]),
+                    amount=Decimal(row[2]),
+                    description=row[3],
+                    category=row[4],
+                    transaction_type=row[5]
+                )
+                for row in cursor.fetchall()
+            ] 
