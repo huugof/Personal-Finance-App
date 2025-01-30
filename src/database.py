@@ -1,5 +1,5 @@
 import sqlite3
-from typing import List, Optional, Dict, Set
+from typing import List, Optional, Dict, Set, Tuple
 from datetime import datetime
 from decimal import Decimal
 from models.transaction import Transaction
@@ -46,6 +46,17 @@ class Database:
             if 'tags' not in columns:
                 print("Adding tags column to categories table")
                 cursor.execute("ALTER TABLE categories ADD COLUMN tags TEXT DEFAULT ''")
+            
+            # Add after the existing table creations
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS categorization_rules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pattern TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    priority INTEGER DEFAULT 0,
+                    FOREIGN KEY (category) REFERENCES categories(name)
+                )
+            """)
             
             conn.commit()
     
@@ -290,3 +301,162 @@ class Database:
                 )
                 for row in cursor.fetchall()
             ] 
+
+    def get_transactions_for_year(self, year: int) -> List[Transaction]:
+        """Get all transactions for a specific year.
+        
+        Args:
+            year: The target year
+            
+        Returns:
+            List of transactions for that year
+        """
+        start_date = datetime(year, 1, 1).isoformat()
+        end_date = datetime(year + 1, 1, 1).isoformat()
+        
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM transactions 
+                WHERE date >= ? AND date < ?
+                ORDER BY date
+            """, (start_date, end_date))
+            
+            return [
+                Transaction(
+                    id=row[0],
+                    date=datetime.fromisoformat(row[1]),
+                    amount=Decimal(row[2]),
+                    description=row[3],
+                    category=row[4],
+                    transaction_type=row[5]
+                )
+                for row in cursor.fetchall()
+            ] 
+
+    def update_transaction_category(self, transaction_id: int, new_category: str) -> None:
+        """Update the category of a transaction.
+        
+        Args:
+            transaction_id: The ID of the transaction to update
+            new_category: The new category name
+        
+        Raises:
+            Exception: If the update fails
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                # First ensure the category exists in categories table
+                conn.execute("""
+                    INSERT OR IGNORE INTO categories (name)
+                    VALUES (?)
+                """, (new_category,))
+                
+                # Then update the transaction
+                conn.execute("""
+                    UPDATE transactions 
+                    SET category = ? 
+                    WHERE id = ?
+                """, (new_category, transaction_id))
+                
+        except sqlite3.Error as e:
+            raise Exception(f"Failed to update transaction category: {str(e)}") 
+
+    def add_categorization_rule(self, pattern: str, category: str, priority: int = 0) -> None:
+        """Add a new categorization rule.
+        
+        Args:
+            pattern: Text pattern to match in transaction description
+            category: Category to assign when pattern matches
+            priority: Rule priority (higher numbers take precedence)
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO categorization_rules (pattern, category, priority)
+                VALUES (?, ?, ?)
+            """, (pattern, category, priority))
+
+    def get_categorization_rules(self) -> List[Tuple[str, str, int]]:
+        """Get all categorization rules.
+        
+        Returns:
+            List of tuples containing (pattern, category, priority)
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT pattern, category, priority 
+                FROM categorization_rules 
+                ORDER BY priority DESC
+            """)
+            return cursor.fetchall()
+
+    def delete_categorization_rule(self, pattern: str, category: str) -> None:
+        """Delete a categorization rule.
+        
+        Args:
+            pattern: Pattern to match
+            category: Category to assign
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                DELETE FROM categorization_rules 
+                WHERE pattern = ? AND category = ?
+            """, (pattern, category))
+
+    def auto_categorize_transaction(self, description: str) -> Optional[str]:
+        """Determine category based on transaction description and rules.
+        
+        Args:
+            description: Transaction description to categorize
+            
+        Returns:
+            Matching category or None if no rules match
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            # Escape special characters in the description
+            escaped_description = description.replace('%', '\\%').replace('_', '\\_')
+            cursor.execute("""
+                SELECT category FROM categorization_rules 
+                WHERE ? LIKE '%' || replace(replace(pattern, '%', '\\%'), '_', '\\_') || '%'
+                ORDER BY priority DESC
+                LIMIT 1
+            """, (escaped_description,))
+            result = cursor.fetchone()
+            return result[0] if result else None
+
+    def apply_rules_to_existing_transactions(self) -> Tuple[int, int]:
+        """Apply categorization rules to all existing transactions.
+        
+        Returns:
+            Tuple of (number of transactions updated, total transactions processed)
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Get all transactions
+            cursor.execute("SELECT id, description, category FROM transactions")
+            transactions = cursor.fetchall()
+            
+            updated_count = 0
+            total_count = len(transactions)
+            
+            for trans_id, description, current_category in transactions:
+                # Skip transactions that already have a non-Uncategorized category
+                if current_category and current_category != "Uncategorized":
+                    continue
+                    
+                # Try to find a matching rule
+                new_category = self.auto_categorize_transaction(description)
+                if new_category and new_category != current_category:
+                    cursor.execute(
+                        "UPDATE transactions SET category = ? WHERE id = ?",
+                        (new_category, trans_id)
+                    )
+                    updated_count += 1
+            
+            conn.commit()
+            return (updated_count, total_count) 

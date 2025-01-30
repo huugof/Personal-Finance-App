@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import List
 from models.transaction import Transaction
 import decimal
+from database import Database
 
 class CSVHandler:
     """Handles importing transactions from CSV files."""
@@ -57,7 +58,7 @@ class CSVHandler:
             raise ValueError(f"Invalid amount format: {amount_str}") from e
 
     @staticmethod
-    def import_transactions(file_path: str) -> List[Transaction]:
+    def import_transactions(file_path: str, db: Database) -> List[Transaction]:
         """
         Import transactions from a CSV file.
         Expected CSV format:
@@ -79,12 +80,23 @@ class CSVHandler:
                         print(f"Processing row {row_num}: {row}")
                         
                         amount = CSVHandler._parse_amount(row['Amount'])
+                        description = row['Description']
+                        
+                        # Try to get category from CSV, then from rules if not provided
+                        category = row.get('Type', '').strip()
+                        if not category:
+                            category = db.auto_categorize_transaction(description)
+                        
+                        if not category:
+                            print(f"Warning: No category found for transaction: {description}")
+                            category = "Uncategorized"
+                        
                         transaction = Transaction(
                             id=None,
                             date=CSVHandler._parse_date(row['Date']),
                             amount=abs(amount),  # Store absolute value
-                            description=row['Description'],
-                            category=row['Type'],  # Use Type column as category
+                            description=description,
+                            category=category,
                             transaction_type="expense" if amount < 0 else "income"
                         )
                         transactions.append(transaction)
@@ -98,8 +110,8 @@ class CSVHandler:
                 print(f"Successful imports: {len(transactions)}")
                 print(f"Failed imports: {error_count}")
                 
-        except FileNotFoundError:
-            print(f"File not found: {file_path}")
+        except Exception as e:
+            print(f"Error reading CSV file: {str(e)}")
             return []
                 
         return transactions 

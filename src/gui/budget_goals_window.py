@@ -59,6 +59,19 @@ class BudgetGoalsWindow:
         self.actual_balance_label = ttk.Label(actual_frame, text="Balance: $0.00")
         self.actual_balance_label.pack(side="left", padx=20)
 
+        # Add new category frame
+        new_category_frame = ttk.Frame(self.parent)
+        new_category_frame.pack(fill="x", padx=10, pady=5)
+
+        ttk.Label(new_category_frame, text="New Category:").pack(side="left", padx=5)
+        self.new_category_entry = ttk.Entry(new_category_frame)
+        self.new_category_entry.pack(side="left", padx=5, fill="x", expand=True)
+        ttk.Button(
+            new_category_frame,
+            text="Add Category",
+            command=self._add_new_category
+        ).pack(side="left", padx=5)
+
         # Sort controls frame
         sort_frame = ttk.LabelFrame(self.parent, text="Sort Options")
         sort_frame.pack(fill="x", padx=10, pady=5)
