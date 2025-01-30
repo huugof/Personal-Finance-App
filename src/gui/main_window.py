@@ -32,9 +32,10 @@ class MainWindow:
         self.left_frame = ttk.Frame(self.main_paned)
         self.main_paned.add(self.left_frame, weight=4)
         
-        # Right frame for rules
-        self.right_frame = ttk.Frame(self.main_paned)
-        self.main_paned.add(self.right_frame, weight=1)
+        # Right frame for rules with fixed width
+        self.right_frame = ttk.Frame(self.main_paned, width=300)
+        self.right_frame.pack_propagate(False)  # Prevent frame from resizing
+        self.main_paned.add(self.right_frame)  # Remove weight parameter
         
         # Initialize variables
         self.type_var = tk.StringVar(value="expense")
@@ -601,18 +602,13 @@ class MainWindow:
     
     def _handle_rules_panel_collapse(self, event=None) -> None:
         """Handle rules panel collapse event."""
-        # Only store width if it's not already collapsed
-        current_width = self.root.winfo_width() - self.main_paned.sashpos(0)
-        if current_width > self.COLLAPSED_WIDTH:
-            self.rules_panel_width = current_width
-        # Set sash position to leave exactly 40px for collapsed panel
+        self.right_frame.configure(width=self.COLLAPSED_WIDTH)
         self.main_paned.sashpos(0, self.root.winfo_width() - self.COLLAPSED_WIDTH)
     
     def _handle_rules_panel_expand(self, event=None) -> None:
         """Handle rules panel expand event."""
-        # Restore to stored width, with minimum of 300px
-        expand_width = max(self.rules_panel_width, 300)
-        self.main_paned.sashpos(0, self.root.winfo_width() - expand_width)
+        self.right_frame.configure(width=self.rules_panel_width)
+        self.main_paned.sashpos(0, self.root.winfo_width() - self.rules_panel_width)
     
     def run(self) -> None:
         """Start the main event loop."""

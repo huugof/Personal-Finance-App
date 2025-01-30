@@ -11,12 +11,17 @@ class RulesWindow:
         self.parent = parent
         self.db = db
         self.is_collapsed = False
+        self.EXPANDED_WIDTH = 300  # Constant for expanded width
         
-        # Create the main frame with explicit minimum width
-        self.frame = ttk.Frame(parent, width=40)
-        self.frame.pack(fill="both", expand=True)
+        # Create the main frame
+        self.frame = ttk.Frame(parent)
+        self.frame.pack(side="left", fill="y")
         
-        # Create header frame that will always be visible
+        # Configure frame width
+        self.frame.configure(width=self.EXPANDED_WIDTH)
+        self.frame.pack_propagate(False)  # Prevent frame from shrinking
+        
+        # Create header frame
         self.header_frame = ttk.Frame(self.frame)
         self.header_frame.pack(fill="x")
         
@@ -28,10 +33,9 @@ class RulesWindow:
         )
         self.title_label.pack(side="left", padx=2)
         
-        # Create button that will always be visible
         self.collapse_button = ttk.Button(
             self.header_frame,
-            text="▶",
+            text="◀",
             width=2,
             command=self._toggle_collapse
         )
@@ -185,10 +189,12 @@ class RulesWindow:
         if self.is_collapsed:
             self.content_frame.pack_forget()
             self.title_label.pack_forget()
+            self.frame.configure(width=40)  # Collapsed width
             self.collapse_button.configure(text="▶")
             self.parent.event_generate("<<RulesPanelCollapsed>>")
         else:
             self.title_label.pack(side="left", padx=2)
             self.content_frame.pack(fill="both", expand=True)
+            self.frame.configure(width=self.EXPANDED_WIDTH)  # Expanded width
             self.collapse_button.configure(text="◀")
             self.parent.event_generate("<<RulesPanelExpanded>>") 
