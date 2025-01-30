@@ -11,6 +11,7 @@ from services.csv_handler import CSVHandler
 from gui.budget_goals_window import BudgetGoalsWindow
 from gui.year_comparison_window import YearComparisonWindow
 from gui.graphing_window import GraphingWindow
+from gui.rules_window import RulesWindow
 
 class MainWindow:
     """Main application window for the budget tracker."""
@@ -48,6 +49,17 @@ class MainWindow:
         self.graphing_tab = ttk.Frame(self.notebook)
         self.notebook.add(self.graphing_tab, text="Graphs")
         GraphingWindow(self.graphing_tab, self.db)
+        
+        # Add Rules Window button at the bottom of the main window
+        rules_button_frame = ttk.Frame(self.root)
+        rules_button_frame.pack(fill="x", padx=10, pady=5)
+        
+        rules_button = ttk.Button(
+            rules_button_frame,
+            text="Open Categorization Rules",
+            command=self._open_rules_window
+        )
+        rules_button.pack(side="right")
         
         # Create rules tab
         self.rules_tab = ttk.Frame(self.notebook)
@@ -712,6 +724,12 @@ class MainWindow:
                     "Error",
                     f"Failed to apply rules: {str(e)}"
                 )
+    
+    def _open_rules_window(self) -> None:
+        """Open the categorization rules window."""
+        from gui.rules_window import RulesWindow
+        rules_window = RulesWindow(self.db)  # Only pass the database
+        rules_window.show()
     
     def run(self) -> None:
         """Start the main event loop."""
