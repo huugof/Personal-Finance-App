@@ -20,56 +20,61 @@ class MainWindow:
         """Initialize the main window."""
         self.root = tk.Tk()
         self.root.title("Budget Tracker")
+        self.root.geometry("1200x600")  # Wider initial size
+        self.root.minsize(1200, 600)    # Wider minimum size
         self.db = db
         
-        # Initialize variables first
+        # Create main container with PanedWindow
+        self.main_paned = ttk.PanedWindow(self.root, orient="horizontal")
+        self.main_paned.pack(fill="both", expand=True)
+        
+        # Left frame for main content
+        self.left_frame = ttk.Frame(self.main_paned)
+        self.main_paned.add(self.left_frame, weight=4)
+        
+        # Right frame for rules
+        self.right_frame = ttk.Frame(self.main_paned)
+        self.main_paned.add(self.right_frame, weight=1)
+        
+        # Initialize variables
         self.type_var = tk.StringVar(value="expense")
         self.amount_entry = None
         self.desc_entry = None
         self.category_entry = None
         self.tree = None
         
-        # Create notebook for tabs
-        self.notebook = ttk.Notebook(self.root)
+        # Create notebook in left frame
+        self.notebook = ttk.Notebook(self.left_frame)
         self.notebook.pack(fill="both", expand=True)
         
-        # Create main tab
+        # Create tabs
         self.main_tab = ttk.Frame(self.notebook)
-        self.notebook.add(self.main_tab, text="Budget Tracker")
-        
-        # Create budget goals tab
         self.budget_goals_tab = ttk.Frame(self.notebook)
-        self.notebook.add(self.budget_goals_tab, text="Budget Goals")
-        
-        # Create year comparison tab
         self.year_comparison_tab = ttk.Frame(self.notebook)
-        self.notebook.add(self.year_comparison_tab, text="Year Comparison")
-        
-        # Add graphing tab
         self.graphing_tab = ttk.Frame(self.notebook)
+        
+        # Add tabs to notebook
+        self.notebook.add(self.main_tab, text="Budget Tracker")
+        self.notebook.add(self.budget_goals_tab, text="Budget Goals")
+        self.notebook.add(self.year_comparison_tab, text="Year Comparison")
         self.notebook.add(self.graphing_tab, text="Graphs")
-        GraphingWindow(self.graphing_tab, self.db)
-        
-        # Add Rules Window button at the bottom of the main window
-        rules_button_frame = ttk.Frame(self.root)
-        rules_button_frame.pack(fill="x", padx=10, pady=5)
-        
-        rules_button = ttk.Button(
-            rules_button_frame,
-            text="Open Categorization Rules",
-            command=self._open_rules_window
-        )
-        rules_button.pack(side="right")
-        
-        # Create rules tab
-        self.rules_tab = ttk.Frame(self.notebook)
-        self.notebook.add(self.rules_tab, text="Categorization Rules")
-        self._setup_rules_tab()
         
         # Initialize UI components
         self._setup_main_tab()
         self._setup_budget_goals_tab()
         self._setup_year_comparison_tab()
+        GraphingWindow(self.graphing_tab, self.db)
+        
+        # Store the original sash position
+        self.rules_panel_width = 300  # Default width when expanded
+        self.COLLAPSED_WIDTH = 40     # Constant for collapsed width
+        
+        # Add rules panel to right frame
+        self.rules_window = RulesWindow(self.right_frame, self.db)
+        
+        # Bind collapse/expand events
+        self.root.bind("<<RulesPanelCollapsed>>", self._handle_rules_panel_collapse)
+        self.root.bind("<<RulesPanelExpanded>>", self._handle_rules_panel_expand)
     
     def _setup_main_tab(self) -> None:
         """Set up the main transaction tab UI."""
@@ -283,73 +288,6 @@ class MainWindow:
     def _setup_year_comparison_tab(self) -> None:
         """Set up the year comparison tab UI."""
         YearComparisonWindow(self.year_comparison_tab, self.db)
-    
-    def _setup_rules_tab(self) -> None:
-        """Set up the categorization rules tab UI."""
-        # Input frame
-        input_frame = ttk.LabelFrame(self.rules_tab, text="Add New Rule")
-        input_frame.pack(fill="x", padx=10, pady=5)
-        
-        # Pattern entry
-        ttk.Label(input_frame, text="Pattern:").grid(row=0, column=0, padx=5, pady=5)
-        self.pattern_entry = ttk.Entry(input_frame, width=30)
-        self.pattern_entry.grid(row=0, column=1, padx=5, pady=5)
-        
-        # Category selection
-        ttk.Label(input_frame, text="Category:").grid(row=0, column=2, padx=5, pady=5)
-        categories = sorted(list(self.db.get_all_categories()))
-        self.rule_category = ttk.Combobox(input_frame, values=categories)
-        self.rule_category.grid(row=0, column=3, padx=5, pady=5)
-        
-        # Priority entry
-        ttk.Label(input_frame, text="Priority:").grid(row=0, column=4, padx=5, pady=5)
-        self.priority_entry = ttk.Entry(input_frame, width=5)
-        self.priority_entry.insert(0, "0")
-        self.priority_entry.grid(row=0, column=5, padx=5, pady=5)
-        
-        # Add button
-        ttk.Button(
-            input_frame,
-            text="Add Rule",
-            command=self._add_categorization_rule
-        ).grid(row=0, column=6, padx=10, pady=5)
-        
-        # Rules list
-        self.rules_tree = ttk.Treeview(
-            self.rules_tab,
-            columns=("Pattern", "Category", "Priority"),
-            show="headings"
-        )
-        
-        # Configure columns
-        self.rules_tree.heading("Pattern", text="Pattern")
-        self.rules_tree.heading("Category", text="Category")
-        self.rules_tree.heading("Priority", text="Priority")
-        
-        # Add scrollbar
-        rules_scrollbar = ttk.Scrollbar(self.rules_tab, orient="vertical", command=self.rules_tree.yview)
-        self.rules_tree.configure(yscrollcommand=rules_scrollbar.set)
-        
-        # Pack widgets
-        self.rules_tree.pack(side="left", fill="both", expand=True, padx=10, pady=5)
-        rules_scrollbar.pack(side="right", fill="y")
-        
-        # Add delete button
-        ttk.Button(
-            self.rules_tab,
-            text="Delete Selected Rule",
-            command=self._delete_categorization_rule
-        ).pack(side="bottom", pady=5)
-        
-        # Add apply rules button
-        ttk.Button(
-            self.rules_tab,
-            text="Apply Rules to Existing Transactions",
-            command=self._apply_rules_to_existing
-        ).pack(side="bottom", pady=5)
-        
-        # Initial refresh
-        self._refresh_rules()
     
     def _add_transaction(self) -> None:
         """Add a new transaction from the input fields."""
@@ -661,75 +599,20 @@ class MainWindow:
                         f"Failed to delete transaction: {str(e)}"
                     )
     
-    def _add_categorization_rule(self) -> None:
-        """Add a new categorization rule."""
-        pattern = self.pattern_entry.get().strip()
-        category = self.rule_category.get().strip()
-        priority = int(self.priority_entry.get().strip() or "0")
-        
-        if not pattern or not category:
-            messagebox.showerror("Error", "Please fill in both pattern and category")
-            return
-        
-        try:
-            self.db.add_categorization_rule(pattern, category, priority)
-            self._refresh_rules()
-            self.pattern_entry.delete(0, tk.END)
-            self.rule_category.set("")
-            self.priority_entry.delete(0, tk.END)
-            self.priority_entry.insert(0, "0")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to add rule: {str(e)}")
-
-    def _delete_categorization_rule(self) -> None:
-        """Delete selected categorization rule."""
-        selected = self.rules_tree.selection()
-        if not selected:
-            messagebox.showwarning("No Selection", "Please select a rule to delete")
-            return
-        
-        try:
-            for item in selected:
-                values = self.rules_tree.item(item)["values"]
-                self.db.delete_categorization_rule(values[0], values[1])
-            self._refresh_rules()
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to delete rule: {str(e)}")
-
-    def _refresh_rules(self) -> None:
-        """Refresh the rules display."""
-        for item in self.rules_tree.get_children():
-            self.rules_tree.delete(item)
-        
-        rules = self.db.get_categorization_rules()
-        for pattern, category, priority in rules:
-            self.rules_tree.insert("", "end", values=(pattern, category, priority))
+    def _handle_rules_panel_collapse(self, event=None) -> None:
+        """Handle rules panel collapse event."""
+        # Only store width if it's not already collapsed
+        current_width = self.root.winfo_width() - self.main_paned.sashpos(0)
+        if current_width > self.COLLAPSED_WIDTH:
+            self.rules_panel_width = current_width
+        # Set sash position to leave exactly 40px for collapsed panel
+        self.main_paned.sashpos(0, self.root.winfo_width() - self.COLLAPSED_WIDTH)
     
-    def _apply_rules_to_existing(self) -> None:
-        """Apply categorization rules to all existing transactions."""
-        if messagebox.askyesno(
-            "Confirm Apply Rules",
-            "This will apply categorization rules to all uncategorized transactions "
-            "and transactions marked as 'Uncategorized'. Continue?"
-        ):
-            try:
-                updated, total = self.db.apply_rules_to_existing_transactions()
-                messagebox.showinfo(
-                    "Rules Applied",
-                    f"Updated {updated} out of {total} transactions."
-                )
-                self._refresh_transactions()
-            except Exception as e:
-                messagebox.showerror(
-                    "Error",
-                    f"Failed to apply rules: {str(e)}"
-                )
-    
-    def _open_rules_window(self) -> None:
-        """Open the categorization rules window."""
-        from gui.rules_window import RulesWindow
-        rules_window = RulesWindow(self.db)  # Only pass the database
-        rules_window.show()
+    def _handle_rules_panel_expand(self, event=None) -> None:
+        """Handle rules panel expand event."""
+        # Restore to stored width, with minimum of 300px
+        expand_width = max(self.rules_panel_width, 300)
+        self.main_paned.sashpos(0, self.root.winfo_width() - expand_width)
     
     def run(self) -> None:
         """Start the main event loop."""
