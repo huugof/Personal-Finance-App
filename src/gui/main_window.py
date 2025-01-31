@@ -459,7 +459,6 @@ class MainWindow:
             try:
                 self.db.delete_transaction(transaction_id)
                 self._refresh_transactions()
-                messagebox.showinfo("Success", "Transaction deleted successfully")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to delete transaction: {str(e)}")
     
@@ -652,10 +651,6 @@ class MainWindow:
                 
                 # Refresh the display
                 self._refresh_transactions()
-                messagebox.showinfo(
-                    "Success",
-                    f"Successfully deleted {len(selected_items)} transaction(s)"
-                )
             except Exception as e:
                 messagebox.showerror(
                     "Error",

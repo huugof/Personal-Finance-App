@@ -166,11 +166,7 @@ class RulesWindow:
             "Confirm Apply Rules",
             "This will apply rules to all uncategorized transactions. Continue?"
         ):
-            updated, total = self.db.apply_rules_to_existing_transactions()
-            messagebox.showinfo(
-                "Rules Applied",
-                f"Updated {updated} out of {total} transactions"
-            )
+            self.db.apply_rules_to_existing_transactions()
     
     def _refresh_rules(self) -> None:
         """Refresh the rules list."""
