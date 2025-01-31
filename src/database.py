@@ -117,6 +117,7 @@ class Database:
                 SELECT category, SUM(amount) 
                 FROM transactions 
                 WHERE transaction_type = 'expense'
+                AND (ignored = 0 OR ignored IS NULL)
                 GROUP BY category
             """)
             return {row[0]: Decimal(row[1]) for row in cursor.fetchall()}
@@ -303,7 +304,8 @@ class Database:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT * FROM transactions 
+                SELECT id, date, amount, description, category, transaction_type, ignored 
+                FROM transactions 
                 WHERE date >= ? AND date < ?
                 ORDER BY date
             """, (start_date, end_date))
@@ -315,10 +317,11 @@ class Database:
                     amount=Decimal(row[2]),
                     description=row[3],
                     category=row[4],
-                    transaction_type=row[5]
+                    transaction_type=row[5],
+                    ignored=bool(row[6])
                 )
                 for row in cursor.fetchall()
-            ] 
+            ]
 
     def get_transactions_for_year(self, year: int) -> List[Transaction]:
         """Get all transactions for a specific year.
@@ -335,7 +338,8 @@ class Database:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT * FROM transactions 
+                SELECT id, date, amount, description, category, transaction_type, ignored 
+                FROM transactions 
                 WHERE date >= ? AND date < ?
                 ORDER BY date
             """, (start_date, end_date))
@@ -347,7 +351,8 @@ class Database:
                     amount=Decimal(row[2]),
                     description=row[3],
                     category=row[4],
-                    transaction_type=row[5]
+                    transaction_type=row[5],
+                    ignored=bool(row[6])
                 )
                 for row in cursor.fetchall()
             ] 

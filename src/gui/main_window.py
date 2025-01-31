@@ -246,6 +246,13 @@ class MainWindow:
             command=self._select_all_filtered
         ).pack(side="right", padx=5)
         
+        # Add bulk actions
+        ttk.Button(
+            bulk_frame,
+            text="Toggle Hidden",
+            command=self._toggle_ignored_selected
+        ).pack(side="left", padx=5)
+        
         # Transactions Table
         self._setup_tree()
         
@@ -292,6 +299,9 @@ class MainWindow:
         
         # Bind selection event
         self.tree.bind("<<TreeviewSelect>>", lambda e: self._update_selection_label())
+        
+        # Bind click event
+        self.tree.bind("<Button-1>", self._handle_click)
     
     def _setup_budget_goals_tab(self) -> None:
         """Set up the budget goals tab UI."""
@@ -367,11 +377,78 @@ class MainWindow:
             column = self.tree.identify_column(event.x)
             item = self.tree.identify_row(event.y)
             
-            # If it's the Actions column (last column)
-            if column == f"#{len(self.tree['columns'])}":
-                values = self.tree.item(item)["values"]
-                if values:
-                    self._confirm_delete_transaction(values[1])  # Pass the ID
+            if not item:
+                return
+            
+            values = self.tree.item(item)["values"]
+            if not values:
+                return
+            
+            # If it's the Actions column
+            if column == "#7":  # Actions column
+                cell_width = self.tree.column("#7", "width")
+                relative_x = event.x - sum(self.tree.column(f"#{i}", "width") for i in range(1, 7))
+                
+                if relative_x < (cell_width / 2):  # First icon (eye)
+                    self._toggle_ignored_selected()  # Use the bulk toggle method
+                else:  # Second icon (trash)
+                    self._confirm_delete_transaction(values[1])
+    
+    def _toggle_ignored_selected(self) -> None:
+        """Toggle the ignored status of all selected transactions."""
+        selected_items = self.tree.selection()
+        if not selected_items:
+            messagebox.showwarning(
+                "No Selection",
+                "Please select one or more transactions to toggle hidden state."
+            )
+            return
+
+        try:
+            with sqlite3.connect(self.db.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Get all selected transaction IDs and their current ignored states
+                transaction_states = []
+                for item_id in selected_items:
+                    transaction_id = self.tree.item(item_id)["values"][1]  # ID is second column
+                    cursor.execute("SELECT ignored FROM transactions WHERE id = ?", (transaction_id,))
+                    current_state = bool(cursor.fetchone()[0])
+                    transaction_states.append((transaction_id, current_state))
+                
+                # Determine the new state (toggle based on majority)
+                current_states = [state for _, state in transaction_states]
+                new_state = not (sum(current_states) > len(current_states) / 2)
+                
+                # Show confirmation dialog with appropriate message
+                action_word = "hide" if new_state else "unhide"
+                if not messagebox.askyesno(
+                    "Confirm Toggle Hidden",
+                    f"Are you sure you want to {action_word} {len(selected_items)} transaction(s)?\n\n"
+                    f"Note: Hidden transactions will be excluded from calculations and reports."
+                ):
+                    return
+                
+                # Update all selected transactions
+                for transaction_id, _ in transaction_states:
+                    cursor.execute(
+                        "UPDATE transactions SET ignored = ? WHERE id = ?",
+                        (new_state, transaction_id)
+                    )
+                
+                conn.commit()
+            
+            self._refresh_transactions()
+            messagebox.showinfo(
+                "Success",
+                f"Successfully {'hid' if new_state else 'unhid'} {len(selected_items)} transaction(s)"
+            )
+            
+        except Exception as e:
+            messagebox.showerror(
+                "Error",
+                f"Failed to update hidden status: {str(e)}"
+            )
     
     def _confirm_delete_transaction(self, transaction_id: int) -> None:
         """Show confirmation dialog before deleting a transaction."""
@@ -394,11 +471,9 @@ class MainWindow:
 
         # Get filtered transactions
         transactions = self._get_filtered_transactions()
-        print(f"Debug: Found {len(transactions)} transactions")  # Debug print
-
+        
         # Update category lists
         categories = sorted(self.db.get_all_categories())
-        print(f"Debug: Found categories: {categories}")  # Debug print
         
         # Update both category dropdowns
         self.bulk_category["values"] = categories
@@ -412,6 +487,9 @@ class MainWindow:
 
         # Add transactions to tree
         for transaction in transactions:
+            # Set eye icon based on ignored status
+            eye_icon = "👁" if not transaction.ignored else "🚫"
+            
             values = (
                 transaction.date.strftime("%Y-%m-%d"),
                 transaction.id,
@@ -419,7 +497,7 @@ class MainWindow:
                 transaction.description,
                 transaction.category,
                 transaction.transaction_type,
-                "",  # Actions column
+                f"{eye_icon} 🗑",  # Actions column with both icons
                 "Yes" if transaction.ignored else "No"
             )
             self.tree.insert("", "end", values=values)

@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Dict, List
 from database import Database
 from models.transaction import Transaction
+from tkinter import messagebox
 
 class YearComparisonWindow:
     """Window for comparing spending between years."""
@@ -67,12 +68,22 @@ class YearComparisonWindow:
         
         self.total_percent = ttk.Label(summary_frame, text="% Change: 0%")
         self.total_percent.pack(side="left", padx=20)
+        
+        # Add refresh button frame
+        refresh_frame = ttk.Frame(self.parent)
+        refresh_frame.pack(fill="x", padx=10, pady=5)
+        
+        ttk.Button(
+            refresh_frame,
+            text="Refresh Comparison",
+            command=self._refresh_comparison
+        ).pack(side="right", padx=5)
     
     def _calculate_category_totals(self, transactions: List[Transaction]) -> Dict[str, Decimal]:
         """Calculate total spending by category from transactions."""
         totals: Dict[str, Decimal] = {}
         for transaction in transactions:
-            if transaction.is_expense:  # Only include expenses
+            if transaction.is_expense and not transaction.ignored:  # Only include non-ignored expenses
                 totals[transaction.category] = totals.get(transaction.category, Decimal('0')) + transaction.amount
         return totals
     

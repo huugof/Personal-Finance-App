@@ -60,6 +60,9 @@ class GraphingWindow:
         monthly_totals: Dict[str, Decimal] = {}
         
         for transaction in transactions:
+            if transaction.ignored:
+                continue
+                
             if category and transaction.category != category:
                 continue
                 
