@@ -76,6 +76,9 @@ class MainWindow:
         # Bind collapse/expand events
         self.root.bind("<<RulesPanelCollapsed>>", self._handle_rules_panel_collapse)
         self.root.bind("<<RulesPanelExpanded>>", self._handle_rules_panel_expand)
+        
+        # Bind the TransactionsChanged event
+        self.root.bind("<<TransactionsChanged>>", lambda e: self._refresh_transactions())
     
     def _setup_main_tab(self) -> None:
         """Set up the main transaction tab UI."""

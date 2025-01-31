@@ -60,91 +60,151 @@ class RulesWindow:
         add_frame = ttk.LabelFrame(main_frame, text="Add New Rule")
         add_frame.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
         
+        # Pattern field
         ttk.Label(add_frame, text="Pattern:").grid(row=0, column=0, padx=5, pady=2, sticky="w")
         self.pattern_entry = ttk.Entry(add_frame)
         self.pattern_entry.grid(row=0, column=1, padx=5, pady=2, sticky="ew")
         
+        # Category field
         ttk.Label(add_frame, text="Category:").grid(row=1, column=0, padx=5, pady=2, sticky="w")
         self.category_entry = ttk.Entry(add_frame)
         self.category_entry.grid(row=1, column=1, padx=5, pady=2, sticky="ew")
         
-        ttk.Label(add_frame, text="Priority:").grid(row=2, column=0, padx=5, pady=2, sticky="w")
+        # Amount field
+        ttk.Label(add_frame, text="Amount (optional):").grid(row=2, column=0, padx=5, pady=2, sticky="w")
+        amount_frame = ttk.Frame(add_frame)
+        amount_frame.grid(row=2, column=1, padx=5, pady=2, sticky="ew")
+        ttk.Label(amount_frame, text="$").pack(side="left")
+        self.amount_entry = ttk.Entry(amount_frame, width=15)
+        self.amount_entry.pack(side="left", padx=(0, 5))
+        
+        # Tolerance field
+        ttk.Label(add_frame, text="Amount Tolerance (±):").grid(row=3, column=0, padx=5, pady=2, sticky="w")
+        tolerance_frame = ttk.Frame(add_frame)
+        tolerance_frame.grid(row=3, column=1, padx=5, pady=2, sticky="ew")
+        ttk.Label(tolerance_frame, text="$").pack(side="left")
+        self.tolerance_entry = ttk.Entry(tolerance_frame, width=10)
+        self.tolerance_entry.pack(side="left", padx=(0, 5))
+        self.tolerance_entry.insert(0, "0.01")
+        
+        # Priority field
+        ttk.Label(add_frame, text="Priority:").grid(row=4, column=0, padx=5, pady=2, sticky="w")
         self.priority_entry = ttk.Entry(add_frame, width=8)
-        self.priority_entry.grid(row=2, column=1, padx=5, pady=2, sticky="w")
+        self.priority_entry.grid(row=4, column=1, padx=5, pady=2, sticky="w")
         self.priority_entry.insert(0, "0")
         
+        # Add Rule button
         ttk.Button(
             add_frame,
             text="Add Rule",
             command=self._add_rule
-        ).grid(row=3, column=0, columnspan=2, pady=5)
+        ).grid(row=5, column=0, columnspan=2, pady=5)
         
-        # Add Apply Rules button
+        # Apply Rules button
         ttk.Button(
             main_frame,
             text="Apply Rules to All Transactions",
             command=self._apply_rules_to_all
-        ).grid(row=4, column=0, columnspan=2, pady=5)
+        ).grid(row=1, column=0, columnspan=2, pady=5)
         
         # Rules list
         list_frame = ttk.LabelFrame(main_frame, text="Existing Rules")
-        list_frame.grid(row=5, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
+        list_frame.grid(row=2, column=0, columnspan=2, padx=5, pady=5, sticky="nsew")
         
-        # Create Treeview for rules with adjusted column widths
+        # Create Treeview for rules
         self.tree = ttk.Treeview(
             list_frame,
-            columns=("Pattern", "Category", "Priority"),
+            columns=("Pattern", "Category", "Amount", "Tolerance", "Priority"),
             show="headings",
             selectmode="browse"
         )
         
-        # Configure columns with specific widths
+        # Configure columns
         self.tree.heading("Pattern", text="Pattern")
         self.tree.heading("Category", text="Category")
+        self.tree.heading("Amount", text="Amount")
+        self.tree.heading("Tolerance", text="±")
         self.tree.heading("Priority", text="Priority")
         
         # Set column widths
-        self.tree.column("Pattern", width=100)
+        self.tree.column("Pattern", width=150)
         self.tree.column("Category", width=100)
+        self.tree.column("Amount", width=80)
+        self.tree.column("Tolerance", width=50)
         self.tree.column("Priority", width=50)
         
         # Add scrollbar
         scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
         
-        # Pack components
+        # Pack tree and scrollbar
         scrollbar.pack(side="right", fill="y")
         self.tree.pack(side="left", fill="both", expand=True)
         
-        # Add delete button
+        # Delete button
         ttk.Button(
             main_frame,
             text="Delete Selected Rule",
             command=self._delete_rule
-        ).grid(row=6, column=0, columnspan=2, pady=5)
+        ).grid(row=3, column=0, columnspan=2, pady=5)
+
+        # Configure grid weights
+        main_frame.grid_columnconfigure(0, weight=1)
+        main_frame.grid_rowconfigure(2, weight=1)  # Make rules list expandable
     
     def _add_rule(self) -> None:
         """Add a new categorization rule."""
         pattern = self.pattern_entry.get().strip()
         category = self.category_entry.get().strip()
+        
+        # Parse amount
+        amount: Optional[float] = None
+        amount_str = self.amount_entry.get().strip()
+        if amount_str:
+            try:
+                amount = float(amount_str)
+            except ValueError:
+                messagebox.showerror("Error", "Amount must be a valid number")
+                return
+        
+        # Parse tolerance
+        tolerance: Optional[float] = None
+        tolerance_str = self.tolerance_entry.get().strip()
+        if tolerance_str:
+            try:
+                tolerance = float(tolerance_str)
+            except ValueError:
+                messagebox.showerror("Error", "Tolerance must be a valid number")
+                return
+        
+        # Parse priority
         try:
             priority = int(self.priority_entry.get().strip())
         except ValueError:
             messagebox.showerror("Error", "Priority must be a number")
             return
-            
+        
         if not pattern or not category:
-            messagebox.showerror("Error", "Please fill in all fields")
+            messagebox.showerror("Error", "Please fill in all required fields")
             return
-            
-        self.db.add_categorization_rule(pattern, category, priority)
+        
+        self.db.add_categorization_rule(
+            pattern=pattern,
+            category=category,
+            priority=priority,
+            amount=amount,
+            tolerance=tolerance
+        )
         self._refresh_rules()
         
         # Clear inputs
         self.pattern_entry.delete(0, tk.END)
         self.category_entry.delete(0, tk.END)
+        self.amount_entry.delete(0, tk.END)
+        self.tolerance_entry.delete(0, tk.END)
+        self.tolerance_entry.insert(0, "0.01")  # Reset to default
         self.priority_entry.delete(0, tk.END)
-        self.priority_entry.insert(0, "0")
+        self.priority_entry.insert(0, "0")  # Reset to default
     
     def _delete_rule(self) -> None:
         """Delete the selected categorization rule."""
@@ -161,12 +221,14 @@ class RulesWindow:
             self._refresh_rules()
     
     def _apply_rules_to_all(self) -> None:
-        """Apply categorization rules to all uncategorized transactions."""
+        """Apply categorization rules to all transactions."""
         if messagebox.askyesno(
             "Confirm Apply Rules",
-            "This will apply rules to all uncategorized transactions. Continue?"
+            "This will apply rules to ALL transactions, potentially overwriting existing categories. Continue?"
         ):
             self.db.apply_rules_to_existing_transactions()
+            # Generate an event to notify parent to refresh transactions
+            self.parent.event_generate("<<TransactionsChanged>>")
     
     def _refresh_rules(self) -> None:
         """Refresh the rules list."""
@@ -175,8 +237,8 @@ class RulesWindow:
             self.tree.delete(item)
             
         # Add current rules
-        for pattern, category, priority in self.db.get_categorization_rules():
-            self.tree.insert("", "end", values=(pattern, category, priority))
+        for pattern, category, amount, tolerance, priority in self.db.get_categorization_rules():
+            self.tree.insert("", "end", values=(pattern, category, amount, tolerance, priority))
     
     def _toggle_collapse(self) -> None:
         """Toggle the collapsed state of the rules panel."""

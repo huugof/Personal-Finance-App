@@ -13,58 +13,58 @@ class Database:
         self._create_tables()
     
     def _create_tables(self) -> None:
-        """Create necessary database tables if they don't exist."""
-        print("Creating/updating database tables")  # Debug log
+        """Create database tables if they don't exist."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             
-            # Create transactions table
+            # Check if we need to update the categorization_rules table
+            cursor.execute("PRAGMA table_info(categorization_rules)")
+            columns = {col[1] for col in cursor.fetchall()}
+            
+            if "amount" not in columns:
+                # Backup existing rules
+                cursor.execute("SELECT pattern, category, priority FROM categorization_rules")
+                existing_rules = cursor.fetchall()
+                
+                # Drop and recreate table
+                cursor.execute("DROP TABLE categorization_rules")
+                cursor.execute("""
+                    CREATE TABLE categorization_rules (
+                        pattern TEXT NOT NULL,
+                        category TEXT NOT NULL,
+                        amount DECIMAL,
+                        amount_tolerance DECIMAL DEFAULT 0.01,
+                        priority INTEGER DEFAULT 0,
+                        PRIMARY KEY (pattern, category)
+                    )
+                """)
+                
+                # Restore existing rules
+                cursor.executemany("""
+                    INSERT INTO categorization_rules (pattern, category, priority)
+                    VALUES (?, ?, ?)
+                """, existing_rules)
+            
+            # Create other tables if they don't exist
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS transactions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     date TEXT NOT NULL,
-                    amount DECIMAL(10,2) NOT NULL,
-                    description TEXT NOT NULL,
-                    category TEXT NOT NULL,
-                    transaction_type TEXT NOT NULL
+                    amount DECIMAL NOT NULL,
+                    description TEXT,
+                    category TEXT,
+                    transaction_type TEXT NOT NULL,
+                    ignored BOOLEAN DEFAULT 0
                 )
             """)
             
-            # Create or update categories table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS categories (
                     name TEXT PRIMARY KEY,
-                    budget_goal DECIMAL(10,2),
-                    tags TEXT DEFAULT ''
+                    budget_goal DECIMAL,
+                    tags TEXT
                 )
             """)
-            
-            # Check if we need to migrate tags column
-            cursor.execute("PRAGMA table_info(categories)")
-            columns = {column[1]: column for column in cursor.fetchall()}
-            
-            if 'tags' not in columns:
-                print("Adding tags column to categories table")
-                cursor.execute("ALTER TABLE categories ADD COLUMN tags TEXT DEFAULT ''")
-            
-            # Add after the existing table creations
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS categorization_rules (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    pattern TEXT NOT NULL,
-                    category TEXT NOT NULL,
-                    priority INTEGER DEFAULT 0,
-                    FOREIGN KEY (category) REFERENCES categories(name)
-                )
-            """)
-            
-            # Check if we need to add the ignored column
-            cursor.execute("PRAGMA table_info(transactions)")
-            columns = {column[1]: column for column in cursor.fetchall()}
-            
-            if 'ignored' not in columns:
-                print("Adding ignored column to transactions table")
-                cursor.execute("ALTER TABLE transactions ADD COLUMN ignored BOOLEAN DEFAULT 0")
             
             conn.commit()
     
@@ -438,35 +438,55 @@ class Database:
         except sqlite3.Error as e:
             raise Exception(f"Failed to update transaction category: {str(e)}")
 
-    def add_categorization_rule(self, pattern: str, category: str, priority: int = 0) -> None:
+    def add_categorization_rule(
+        self, 
+        pattern: str, 
+        category: str, 
+        amount: Optional[Decimal] = None,
+        tolerance: Decimal = Decimal("0.01"),
+        priority: int = 0
+    ) -> None:
         """Add a new categorization rule.
         
         Args:
-            pattern: Text pattern to match in transaction description
-            category: Category to assign when pattern matches
-            priority: Rule priority (higher numbers take precedence)
+            pattern: The pattern to match against transaction descriptions
+            category: The category to assign
+            amount: Optional specific amount to match
+            tolerance: Amount tolerance (default $0.01)
+            priority: Rule priority (higher numbers run first)
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO categorization_rules (pattern, category, priority)
-                VALUES (?, ?, ?)
-            """, (pattern, category, priority))
+                INSERT OR REPLACE INTO categorization_rules 
+                (pattern, category, amount, amount_tolerance, priority)
+                VALUES (?, ?, ?, ?, ?)
+            """, (pattern, category, amount, tolerance, priority))
+            conn.commit()
 
-    def get_categorization_rules(self) -> List[Tuple[str, str, int]]:
+    def get_categorization_rules(self) -> List[Tuple[str, str, Optional[Decimal], Decimal, int]]:
         """Get all categorization rules.
         
         Returns:
-            List of tuples containing (pattern, category, priority)
+            List of tuples containing (pattern, category, amount, tolerance, priority)
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT pattern, category, priority 
+                SELECT pattern, category, amount, amount_tolerance, priority 
                 FROM categorization_rules 
                 ORDER BY priority DESC
             """)
-            return cursor.fetchall()
+            
+            # Convert amount and tolerance strings to Decimal if not None
+            rules = []
+            for row in cursor.fetchall():
+                pattern, category, amount_str, tolerance_str, priority = row
+                amount = Decimal(amount_str) if amount_str is not None else None
+                tolerance = Decimal(tolerance_str) if tolerance_str is not None else Decimal("0.01")
+                rules.append((pattern, category, amount, tolerance, priority))
+            
+            return rules
 
     def delete_categorization_rule(self, pattern: str, category: str) -> None:
         """Delete a categorization rule.
@@ -504,38 +524,58 @@ class Database:
             result = cursor.fetchone()
             return result[0] if result else None
 
-    def apply_rules_to_existing_transactions(self) -> Tuple[int, int]:
-        """Apply categorization rules to all existing transactions.
+    def apply_rules_to_existing_transactions(self) -> None:
+        """Apply categorization rules to all transactions.
         
-        Returns:
-            Tuple of (number of transactions updated, total transactions processed)
+        This method will:
+        1. Get all transactions
+        2. Get all categorization rules ordered by priority
+        3. For each transaction, apply the first matching rule
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             
-            # Get all transactions
-            cursor.execute("SELECT id, description, category FROM transactions")
+            # Get all transactions (removed the category filter)
+            cursor.execute("""
+                SELECT id, description, amount, date, transaction_type 
+                FROM transactions
+            """)
             transactions = cursor.fetchall()
             
-            updated_count = 0
-            total_count = len(transactions)
+            # Get all rules ordered by priority
+            cursor.execute("""
+                SELECT pattern, category, amount, amount_tolerance, priority 
+                FROM categorization_rules 
+                ORDER BY priority DESC
+            """)
+            rules = cursor.fetchall()
             
-            for trans_id, description, current_category in transactions:
-                # Skip transactions that already have a non-Uncategorized category
-                if current_category and current_category != "Uncategorized":
-                    continue
-                    
-                # Try to find a matching rule
-                new_category = self.auto_categorize_transaction(description)
-                if new_category and new_category != current_category:
-                    cursor.execute(
-                        "UPDATE transactions SET category = ? WHERE id = ?",
-                        (new_category, trans_id)
-                    )
-                    updated_count += 1
+            # Process each transaction
+            updates_made = 0
+            for trans_id, description, trans_amount, date, trans_type in transactions:
+                for pattern, category, rule_amount, tolerance, priority in rules:
+                    # Check if description matches pattern
+                    if pattern.lower() in description.lower():
+                        # If rule has an amount, check if it matches within tolerance
+                        if rule_amount is not None:
+                            rule_amount = Decimal(str(rule_amount))
+                            tolerance = Decimal(str(tolerance or "0.01"))
+                            trans_amount = Decimal(str(trans_amount))
+                            
+                            if abs(trans_amount - rule_amount) > tolerance:
+                                continue  # Amount doesn't match within tolerance
+                        
+                        # Update the transaction with the matching category
+                        cursor.execute("""
+                            UPDATE transactions 
+                            SET category = ? 
+                            WHERE id = ?
+                        """, (category, trans_id))
+                        updates_made += 1
+                        break  # Stop checking rules for this transaction
             
             conn.commit()
-            return (updated_count, total_count)
+            print(f"Updated {updates_made} transactions")  # Debug log
 
     def delete_transaction_by_attributes(
         self,
