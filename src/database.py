@@ -58,6 +58,14 @@ class Database:
                 )
             """)
             
+            # Check if we need to add the ignored column
+            cursor.execute("PRAGMA table_info(transactions)")
+            columns = {column[1]: column for column in cursor.fetchall()}
+            
+            if 'ignored' not in columns:
+                print("Adding ignored column to transactions table")
+                cursor.execute("ALTER TABLE transactions ADD COLUMN ignored BOOLEAN DEFAULT 0")
+            
             conn.commit()
     
     def add_transaction(self, transaction: Transaction) -> int:
@@ -77,19 +85,26 @@ class Database:
             return cursor.lastrowid
     
     def get_transactions(self) -> List[Transaction]:
-        """Retrieve all transactions from the database."""
+        """Get all transactions from the database."""
+        print("Debug: Fetching transactions from database")  # Debug print
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM transactions")
+            cursor.execute("""
+                SELECT id, date, amount, description, category, transaction_type, ignored 
+                FROM transactions 
+                ORDER BY date DESC
+            """)
             rows = cursor.fetchall()
+            print(f"Debug: Found {len(rows)} rows in database")  # Debug print
             return [
                 Transaction(
                     id=row[0],
-                    date=datetime.fromisoformat(row[1]),
-                    amount=Decimal(row[2]),
+                    date=datetime.strptime(row[1], "%Y-%m-%dT%H:%M:%S"),
+                    amount=Decimal(str(row[2])),
                     description=row[3],
                     category=row[4],
-                    transaction_type=row[5]
+                    transaction_type=row[5],
+                    ignored=bool(row[6])
                 )
                 for row in rows
             ]
@@ -216,27 +231,30 @@ class Database:
             """, (category,))
             conn.commit()
 
-    def get_all_categories(self) -> Set[str]:
-        """Get all category names from both transactions and categories tables.
+    def get_all_categories(self) -> List[str]:
+        """Get all category names from the database.
         
         Returns:
-            Set of unique category names
+            List of category names sorted alphabetically
         """
-        print("Getting all categories")  # Debug log
+        print("Debug: Fetching all categories")  # Debug print
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            # Get categories from transactions
-            cursor.execute("SELECT DISTINCT category FROM transactions")
-            transaction_categories = {row[0] for row in cursor.fetchall()}
             
             # Get categories from categories table
-            cursor.execute("SELECT name FROM categories")
-            defined_categories = {row[0] for row in cursor.fetchall()}
+            cursor.execute("SELECT DISTINCT name FROM categories WHERE name IS NOT NULL")
+            category_names = set(row[0] for row in cursor.fetchall())
             
-            # Combine both sets
-            all_categories = transaction_categories | defined_categories
-            print(f"Found categories: {all_categories}")  # Debug log
-            return all_categories
+            # Get categories from transactions table
+            cursor.execute("SELECT DISTINCT category FROM transactions WHERE category IS NOT NULL")
+            transaction_categories = set(row[0] for row in cursor.fetchall())
+            
+            # Combine both sets and remove empty strings
+            all_categories = category_names | transaction_categories
+            all_categories = {cat for cat in all_categories if cat and cat.strip()}
+            
+            print(f"Debug: Found categories: {all_categories}")  # Debug print
+            return sorted(all_categories)
 
     def delete_category(self, category: str) -> None:
         """Delete a category from the database.

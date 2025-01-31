@@ -205,20 +205,33 @@ class MainWindow:
         self.selection_label = ttk.Label(bulk_frame, text="0 items selected")
         self.selection_label.pack(side="left", padx=5)
         
-        # Category change dropdown
+        # Category change dropdown with manual entry
         ttk.Label(bulk_frame, text="Change category to:").pack(side="left", padx=5)
-        self.bulk_category = ttk.Combobox(bulk_frame)
+        self.bulk_category = ttk.Combobox(
+            bulk_frame,
+            width=30,
+            state="normal"  # Allow both selection and manual entry
+        )
         self.bulk_category.pack(side="left", padx=5)
-        
-        # Get all categories for the dropdown
-        categories = self.db.get_all_categories()
-        self.bulk_category["values"] = categories
-        
-        # Bulk action buttons
+
+        # Get initial categories
+        try:
+            categories = sorted(self.db.get_all_categories())
+            print(f"Debug: Initial categories: {categories}")  # Debug print
+            self.bulk_category["values"] = categories
+            self.category_filter["values"] = ["All"] + categories
+        except Exception as e:
+            print(f"Error loading categories: {e}")  # Debug print
+            messagebox.showerror(
+                "Error",
+                f"Failed to load categories: {str(e)}"
+            )
+
+        # Apply Category button
         ttk.Button(
             bulk_frame,
             text="Apply Category",
-            command=self._bulk_update_category
+            command=self._apply_category_to_selected
         ).pack(side="left", padx=5)
         
         ttk.Button(
@@ -234,53 +247,51 @@ class MainWindow:
         ).pack(side="right", padx=5)
         
         # Transactions Table
+        self._setup_tree()
+        
+        # Initial refresh of transactions
+        self._refresh_transactions()
+    
+    def _setup_tree(self) -> None:
+        """Set up the transaction treeview."""
+        # Create scrollbar
+        scrollbar = ttk.Scrollbar(self.main_tab)
+        scrollbar.pack(side="right", fill="y")
+
+        # Create treeview
         self.tree = ttk.Treeview(
             self.main_tab,
-            columns=("Select", "ID", "Date", "Amount", "Description", "Category", "Type", "Actions"),
+            columns=("date", "id", "amount", "description", "category", "type", "actions", "ignored"),
             show="headings",
-            selectmode="extended"
+            yscrollcommand=scrollbar.set
         )
+        scrollbar.config(command=self.tree.yview)
         
-        # Hide Select and ID columns but keep them for reference
-        self.tree.column("Select", width=30, stretch=False)
-        self.tree.column("ID", width=0, stretch=False)
-        self.tree.heading("Select", text="✓")
-        self.tree.heading("ID", text="ID")
+        # Configure columns
+        self.tree.heading("date", text="Date", command=lambda: self._sort_by("date"))
+        self.tree.heading("id", text="ID")
+        self.tree.heading("amount", text="Amount", command=lambda: self._sort_by("amount"))
+        self.tree.heading("description", text="Description", command=lambda: self._sort_by("description"))
+        self.tree.heading("category", text="Category", command=lambda: self._sort_by("category"))
+        self.tree.heading("type", text="Type", command=lambda: self._sort_by("type"))
+        self.tree.heading("actions", text="Actions")
+        self.tree.heading("ignored", text="Ignored")
         
-        # Set column headings and widths
-        column_widths = {
-            "Date": 100,
-            "Amount": 100,
-            "Description": 200,
-            "Category": 150,
-            "Type": 100,
-            "Actions": 70
-        }
+        # Set column widths and alignments
+        self.tree.column("date", width=100, anchor="w")
+        self.tree.column("id", width=50, anchor="e")
+        self.tree.column("amount", width=100, anchor="e")
+        self.tree.column("description", width=300, anchor="w")
+        self.tree.column("category", width=150, anchor="w")
+        self.tree.column("type", width=100, anchor="w")
+        self.tree.column("actions", width=100, anchor="center")
+        self.tree.column("ignored", width=70, anchor="center")
         
-        # Configure columns (skipping hidden ID column)
-        for col in self.tree["columns"][2:]:
-            self.tree.heading(col, text=col)
-            self.tree.column(col, width=column_widths.get(col, 150))
+        # Pack the tree
+        self.tree.pack(fill="both", expand=True)
         
-        # Configure Actions column
-        self.tree.column("Actions", anchor="center")
-        
-        # Add scrollbar
-        scrollbar = ttk.Scrollbar(self.main_tab, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scrollbar.set)
-        
-        # Pack the tree and scrollbar
-        scrollbar.pack(side="right", fill="y")
-        self.tree.pack(side="left", fill="both", expand=True, padx=10, pady=5)
-        
-        # Bind click event for delete button
-        self.tree.bind("<Button-1>", self._handle_click)
-        
-        # Bind selection changes
+        # Bind selection event
         self.tree.bind("<<TreeviewSelect>>", lambda e: self._update_selection_label())
-        
-        # Initial refresh
-        self._refresh_transactions()
     
     def _setup_budget_goals_tab(self) -> None:
         """Set up the budget goals tab UI."""
@@ -375,38 +386,43 @@ class MainWindow:
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to delete transaction: {str(e)}")
     
-    def _refresh_transactions(self, transactions: Optional[List[Transaction]] = None) -> None:
-        """Refresh the transactions display."""
+    def _refresh_transactions(self) -> None:
+        """Refresh the transaction list."""
         # Clear existing items
         for item in self.tree.get_children():
             self.tree.delete(item)
+
+        # Get filtered transactions
+        transactions = self._get_filtered_transactions()
+        print(f"Debug: Found {len(transactions)} transactions")  # Debug print
+
+        # Update category lists
+        categories = sorted(self.db.get_all_categories())
+        print(f"Debug: Found categories: {categories}")  # Debug print
         
-        # Get transactions if not provided
-        if transactions is None:
-            transactions = self.db.get_transactions()
+        # Update both category dropdowns
+        self.bulk_category["values"] = categories
+        self.category_filter["values"] = ["All"] + categories
         
-        # Update category filter options
-        categories = ["All"] + sorted(list({t.category for t in transactions}))
-        self.category_filter["values"] = categories
+        # Set default values if not already set
         if not self.category_filter.get():
             self.category_filter.set("All")
-        
-        # Display transactions
+        if not self.bulk_category.get() and categories:
+            self.bulk_category.set(categories[0])
+
+        # Add transactions to tree
         for transaction in transactions:
-            self.tree.insert(
-                "",
-                "end",
-                values=(
-                    "☐",  # Checkbox column
-                    transaction.id,
-                    transaction.date.strftime("%Y-%m-%d"),
-                    f"${transaction.amount:.2f}",
-                    transaction.description,
-                    transaction.category,
-                    transaction.transaction_type,
-                    "🗑"
-                )
+            values = (
+                transaction.date.strftime("%Y-%m-%d"),
+                transaction.id,
+                f"${transaction.amount:,.2f}",
+                transaction.description,
+                transaction.category,
+                transaction.transaction_type,
+                "",  # Actions column
+                "Yes" if transaction.ignored else "No"
             )
+            self.tree.insert("", "end", values=values)
     
     def _clear_inputs(self) -> None:
         """Clear all input fields."""
@@ -474,7 +490,7 @@ class MainWindow:
                 filtered_transactions.append(transaction)
             
             # Update the tree with filtered transactions
-            self._refresh_transactions(filtered_transactions)
+            self._refresh_transactions()
             
         except ValueError as e:
             messagebox.showerror("Error", f"Invalid filter value: {str(e)}")
@@ -495,9 +511,8 @@ class MainWindow:
         selected = len(self.tree.selection())
         self.selection_label.config(text=f"{selected} items selected")
     
-    def _bulk_update_category(self) -> None:
-        """Bulk update categories for selected transactions."""
-        # Get selected items
+    def _apply_category_to_selected(self) -> None:
+        """Apply the selected category to all selected transactions."""
         selected_items = self.tree.selection()
         if not selected_items:
             messagebox.showwarning(
@@ -506,7 +521,6 @@ class MainWindow:
             )
             return
 
-        # Get the new category from the combobox
         new_category = self.bulk_category.get().strip()
         if not new_category:
             messagebox.showwarning(
@@ -609,6 +623,120 @@ class MainWindow:
         """Handle rules panel expand event."""
         self.right_frame.configure(width=self.rules_panel_width)
         self.main_paned.sashpos(0, self.root.winfo_width() - self.rules_panel_width)
+    
+    def _sort_by(self, column: str) -> None:
+        """Sort treeview by the specified column.
+        
+        Args:
+            column: The column name to sort by
+        """
+        # Get all items
+        items = [(self.tree.set(item, column), item) for item in self.tree.get_children("")]
+        
+        # Determine sort order (toggle between ascending and descending)
+        if not hasattr(self, "_sort_reverse"):
+            self._sort_reverse = {}
+        self._sort_reverse[column] = not self._sort_reverse.get(column, False)
+        
+        # Sort items
+        items.sort(reverse=self._sort_reverse[column])
+        
+        # Special handling for date and amount columns
+        if column == "date":
+            items = [(datetime.strptime(value, "%Y-%m-%d"), item) for value, item in items]
+            items.sort(reverse=self._sort_reverse[column])
+            items = [(value.strftime("%Y-%m-%d"), item) for value, item in items]
+        elif column == "amount":
+            items = [(Decimal(value.replace("$", "").replace(",", "")), item) for value, item in items]
+            items.sort(reverse=self._sort_reverse[column])
+            items = [(f"${value:,.2f}", item) for value, item in items]
+        
+        # Move items in the tree
+        for index, (_, item) in enumerate(items):
+            self.tree.move(item, "", index)
+        
+        # Update column header
+        arrow = "▼" if self._sort_reverse[column] else "▲"
+        for col in self.tree["columns"]:
+            text = self.tree.heading(col)["text"].replace("▲", "").replace("▼", "").strip()
+            self.tree.heading(col, text=text)
+        self.tree.heading(column, text=f"{self.tree.heading(column)['text'].split()[0]} {arrow}")
+    
+    def _get_filtered_transactions(self) -> List[Transaction]:
+        """Get transactions based on current filter settings."""
+        transactions = self.db.get_transactions()
+        
+        # If no filters are active, return all transactions
+        if (not self.start_date.get().strip() and
+            not self.end_date.get().strip() and
+            not self.min_amount.get().strip() and
+            not self.max_amount.get().strip() and
+            not self.desc_filter.get().strip() and
+            self.category_filter.get() == "All" and
+            self.type_filter.get() == "All"):
+            return transactions
+        
+        # Rest of the filtering logic remains the same
+        filtered = []
+        for transaction in transactions:
+            # Apply all filters...
+            if self._transaction_matches_filters(transaction):
+                filtered.append(transaction)
+        
+        return filtered
+
+    def _transaction_matches_filters(self, transaction: Transaction) -> bool:
+        """Check if a transaction matches all current filters."""
+        # Date filters
+        if self.start_date.get().strip():
+            try:
+                start = datetime.strptime(self.start_date.get().strip(), "%Y-%m-%d")
+                if transaction.date < start:
+                    return False
+            except ValueError:
+                pass
+
+        if self.end_date.get().strip():
+            try:
+                end = datetime.strptime(self.end_date.get().strip(), "%Y-%m-%d")
+                if transaction.date > end:
+                    return False
+            except ValueError:
+                pass
+
+        # Amount filters
+        if self.min_amount.get().strip():
+            try:
+                min_val = Decimal(self.min_amount.get().strip())
+                if transaction.amount < min_val:
+                    return False
+            except (ValueError, InvalidOperation):
+                pass
+
+        if self.max_amount.get().strip():
+            try:
+                max_val = Decimal(self.max_amount.get().strip())
+                if transaction.amount > max_val:
+                    return False
+            except (ValueError, InvalidOperation):
+                pass
+
+        # Description filter
+        desc_filter = self.desc_filter.get().strip().lower()
+        if desc_filter and desc_filter not in transaction.description.lower():
+            return False
+
+        # Category filter
+        category = self.category_filter.get()
+        if category != "All" and transaction.category != category:
+            return False
+
+        # Type filter
+        type_filter = self.type_filter.get()
+        if type_filter != "All" and transaction.transaction_type.lower() != type_filter.lower():
+            return False
+
+        return True
     
     def run(self) -> None:
         """Start the main event loop."""
