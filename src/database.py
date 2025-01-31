@@ -385,6 +385,59 @@ class Database:
         except sqlite3.Error as e:
             raise Exception(f"Failed to update transaction category: {str(e)}") 
 
+    def update_transaction_by_attributes(
+        self,
+        date: datetime,
+        amount: Decimal,
+        description: str,
+        category: str,
+        transaction_type: str
+    ) -> None:
+        """Update a transaction's category based on its attributes.
+        
+        Args:
+            date: Transaction date
+            amount: Transaction amount
+            description: Transaction description
+            category: New category to set
+            transaction_type: Type of transaction (income/expense)
+            
+        Raises:
+            Exception: If the update fails
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                # First ensure the category exists in categories table
+                conn.execute("""
+                    INSERT OR IGNORE INTO categories (name)
+                    VALUES (?)
+                """, (category,))
+                
+                # Then update the transaction
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE transactions 
+                    SET category = ? 
+                    WHERE date = ? 
+                    AND amount = ? 
+                    AND description = ? 
+                    AND transaction_type = ?
+                """, (
+                    category,
+                    date.strftime("%Y-%m-%dT%H:%M:%S"),  # Convert datetime to string
+                    str(amount),  # Convert Decimal to string
+                    description,
+                    transaction_type
+                ))
+                
+                if cursor.rowcount == 0:
+                    raise Exception("No matching transaction found")
+                
+                conn.commit()
+                
+        except sqlite3.Error as e:
+            raise Exception(f"Failed to update transaction category: {str(e)}")
+
     def add_categorization_rule(self, pattern: str, category: str, priority: int = 0) -> None:
         """Add a new categorization rule.
         
@@ -482,4 +535,39 @@ class Database:
                     updated_count += 1
             
             conn.commit()
-            return (updated_count, total_count) 
+            return (updated_count, total_count)
+
+    def delete_transaction_by_attributes(
+        self,
+        date: str,
+        amount: str,
+        description: str,
+        category: str,
+        transaction_type: str
+    ) -> None:
+        """Delete a transaction that matches all the given attributes.
+        
+        Args:
+            date: The transaction date in ISO format (YYYY-MM-DDT00:00:00)
+            amount: The transaction amount as a string
+            description: The transaction description
+            category: The transaction category
+            transaction_type: The type of transaction (income/expense)
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                DELETE FROM transactions 
+                WHERE date = ? 
+                AND amount = ? 
+                AND description = ? 
+                AND category = ? 
+                AND transaction_type = ?
+            """, (
+                date,
+                amount,
+                description,
+                category,
+                transaction_type
+            ))
+            conn.commit() 

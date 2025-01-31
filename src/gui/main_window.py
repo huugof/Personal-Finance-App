@@ -20,8 +20,8 @@ class MainWindow:
         """Initialize the main window."""
         self.root = tk.Tk()
         self.root.title("Budget Tracker")
-        self.root.geometry("1200x600")  # Wider initial size
-        self.root.minsize(1200, 600)    # Wider minimum size
+        self.root.geometry("1200x1300")  # Increased height from 600 to 800
+        self.root.minsize(1200, 800)    # Increased minimum height from 600 to 800
         self.db = db
         
         # Create main container with PanedWindow
@@ -183,6 +183,17 @@ class MainWindow:
         self.type_filter.set("All")
         self.type_filter.pack(side="left", padx=2)
         
+        # Show Hidden Transactions checkbox
+        show_hidden_frame = ttk.Frame(filter_frame)
+        show_hidden_frame.pack(fill="x", padx=5, pady=2)
+        self.show_hidden_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            show_hidden_frame,
+            text="Show Hidden Transactions",
+            variable=self.show_hidden_var,
+            command=self._refresh_transactions
+        ).pack(side="left", padx=5)
+        
         # Filter Buttons
         button_frame = ttk.Frame(filter_frame)
         button_frame.pack(fill="x", padx=5, pady=5)
@@ -201,19 +212,52 @@ class MainWindow:
         bulk_frame = ttk.LabelFrame(self.main_tab, text="Bulk Actions")
         bulk_frame.pack(fill="x", padx=10, pady=5)
         
+        # Top row with selection info and category change
+        top_row = ttk.Frame(bulk_frame)
+        top_row.pack(fill="x", padx=5, pady=2)
+        
         # Selection info label
-        self.selection_label = ttk.Label(bulk_frame, text="0 items selected")
+        self.selection_label = ttk.Label(top_row, text="0 items selected")
         self.selection_label.pack(side="left", padx=5)
         
-        # Category change dropdown with manual entry
-        ttk.Label(bulk_frame, text="Change category to:").pack(side="left", padx=5)
+        # Category change
+        ttk.Label(top_row, text="Category:").pack(side="left", padx=20)
         self.bulk_category = ttk.Combobox(
-            bulk_frame,
+            top_row,
             width=30,
             state="normal"  # Allow both selection and manual entry
         )
         self.bulk_category.pack(side="left", padx=5)
-
+        
+        # Buttons row
+        button_row = ttk.Frame(bulk_frame)
+        button_row.pack(fill="x", padx=5, pady=2)
+        
+        # Add buttons to the button row
+        ttk.Button(
+            button_row,
+            text="Apply Category",
+            command=self._apply_category_to_selected
+        ).pack(side="left", padx=5)
+        
+        ttk.Button(
+            button_row,
+            text="Delete Selected",
+            command=self._bulk_delete
+        ).pack(side="left", padx=5)
+        
+        ttk.Button(
+            button_row,
+            text="Toggle Hidden",
+            command=self._toggle_ignored_selected
+        ).pack(side="left", padx=5)
+        
+        ttk.Button(
+            button_row,
+            text="Select All Filtered",
+            command=self._select_all_filtered
+        ).pack(side="right", padx=5)
+        
         # Get initial categories
         try:
             categories = sorted(self.db.get_all_categories())
@@ -226,32 +270,6 @@ class MainWindow:
                 "Error",
                 f"Failed to load categories: {str(e)}"
             )
-
-        # Apply Category button
-        ttk.Button(
-            bulk_frame,
-            text="Apply Category",
-            command=self._apply_category_to_selected
-        ).pack(side="left", padx=5)
-        
-        ttk.Button(
-            bulk_frame,
-            text="Delete Selected",
-            command=self._bulk_delete
-        ).pack(side="left", padx=5)
-        
-        ttk.Button(
-            bulk_frame,
-            text="Select All Filtered",
-            command=self._select_all_filtered
-        ).pack(side="right", padx=5)
-        
-        # Add bulk actions
-        ttk.Button(
-            bulk_frame,
-            text="Toggle Hidden",
-            command=self._toggle_ignored_selected
-        ).pack(side="left", padx=5)
         
         # Transactions Table
         self._setup_tree()
@@ -268,7 +286,7 @@ class MainWindow:
         # Create treeview
         self.tree = ttk.Treeview(
             self.main_tab,
-            columns=("date", "id", "amount", "description", "category", "type", "actions", "ignored"),
+            columns=("date", "amount", "description", "category", "type"),
             show="headings",
             yscrollcommand=scrollbar.set
         )
@@ -276,32 +294,26 @@ class MainWindow:
         
         # Configure columns
         self.tree.heading("date", text="Date", command=lambda: self._sort_by("date"))
-        self.tree.heading("id", text="ID")
         self.tree.heading("amount", text="Amount", command=lambda: self._sort_by("amount"))
         self.tree.heading("description", text="Description", command=lambda: self._sort_by("description"))
         self.tree.heading("category", text="Category", command=lambda: self._sort_by("category"))
         self.tree.heading("type", text="Type", command=lambda: self._sort_by("type"))
-        self.tree.heading("actions", text="Actions")
-        self.tree.heading("ignored", text="Ignored")
         
         # Set column widths and alignments
         self.tree.column("date", width=100, anchor="w")
-        self.tree.column("id", width=50, anchor="e")
         self.tree.column("amount", width=100, anchor="e")
         self.tree.column("description", width=300, anchor="w")
         self.tree.column("category", width=150, anchor="w")
         self.tree.column("type", width=100, anchor="w")
-        self.tree.column("actions", width=100, anchor="center")
-        self.tree.column("ignored", width=70, anchor="center")
+        
+        # Configure tag for hidden transactions
+        self.tree.tag_configure("hidden", foreground="gray")
         
         # Pack the tree
         self.tree.pack(fill="both", expand=True)
         
         # Bind selection event
         self.tree.bind("<<TreeviewSelect>>", lambda e: self._update_selection_label())
-        
-        # Bind click event
-        self.tree.bind("<Button-1>", self._handle_click)
     
     def _setup_budget_goals_tab(self) -> None:
         """Set up the budget goals tab UI."""
@@ -370,54 +382,69 @@ class MainWindow:
             finally:
                 self.context_menu.grab_release()
     
-    def _handle_click(self, event) -> None:
-        """Handle click events on the tree view."""
+    def _on_tree_click(self, event) -> None:
+        """Handle clicks on the transaction tree."""
         region = self.tree.identify_region(event.x, event.y)
         if region == "cell":
-            column = self.tree.identify_column(event.x)
             item = self.tree.identify_row(event.y)
-            
-            if not item:
-                return
-            
-            values = self.tree.item(item)["values"]
-            if not values:
-                return
-            
-            # If it's the Actions column
-            if column == "#7":  # Actions column
-                cell_width = self.tree.column("#7", "width")
-                relative_x = event.x - sum(self.tree.column(f"#{i}", "width") for i in range(1, 7))
-                
-                if relative_x < (cell_width / 2):  # First icon (eye)
-                    self._toggle_ignored_selected()  # Use the bulk toggle method
-                else:  # Second icon (trash)
-                    self._confirm_delete_transaction(values[1])
+            if item:  # If we have a valid item
+                if not self.tree.selection():  # No selection
+                    self._toggle_single_transaction_ignored(item)
+                else:
+                    self._toggle_ignored_selected()
     
     def _toggle_ignored_selected(self) -> None:
         """Toggle the ignored status of all selected transactions."""
         selected_items = self.tree.selection()
-        if not selected_items:
-            messagebox.showwarning(
-                "No Selection",
-                "Please select one or more transactions to toggle hidden state."
-            )
-            return
-
+        
         try:
             with sqlite3.connect(self.db.db_path) as conn:
                 cursor = conn.cursor()
                 
-                # Get all selected transaction IDs and their current ignored states
+                # Get all selected transaction details and their current ignored states
                 transaction_states = []
                 for item_id in selected_items:
-                    transaction_id = self.tree.item(item_id)["values"][1]  # ID is second column
-                    cursor.execute("SELECT ignored FROM transactions WHERE id = ?", (transaction_id,))
-                    current_state = bool(cursor.fetchone()[0])
-                    transaction_states.append((transaction_id, current_state))
+                    values = self.tree.item(item_id)["values"]
+                    if not values:
+                        continue
+                    
+                    date = datetime.strptime(values[0], "%Y-%m-%d")
+                    amount = Decimal(values[1].replace("$", "").replace(",", ""))
+                    description = values[2]
+                    category = values[3]
+                    transaction_type = values[4]
+                    
+                    cursor.execute("""
+                        SELECT ignored FROM transactions 
+                        WHERE date = ? 
+                        AND amount = ? 
+                        AND description = ? 
+                        AND category = ? 
+                        AND transaction_type = ?
+                    """, (
+                        date.strftime("%Y-%m-%dT%H:%M:%S"),  # Convert datetime to string
+                        str(amount),  # Convert Decimal to string
+                        description,
+                        category,
+                        transaction_type
+                    ))
+                    result = cursor.fetchone()
+                    if result:
+                        current_state = bool(result[0])
+                        transaction_states.append((
+                            date,
+                            amount,
+                            description,
+                            category,
+                            transaction_type,
+                            current_state
+                        ))
+                
+                if not transaction_states:
+                    return
                 
                 # Determine the new state (toggle based on majority)
-                current_states = [state for _, state in transaction_states]
+                current_states = [state for *_, state in transaction_states]
                 new_state = not (sum(current_states) > len(current_states) / 2)
                 
                 # Show confirmation dialog with appropriate message
@@ -428,21 +455,103 @@ class MainWindow:
                     f"Note: Hidden transactions will be excluded from calculations and reports."
                 ):
                     return
-                
+
                 # Update all selected transactions
-                for transaction_id, _ in transaction_states:
-                    cursor.execute(
-                        "UPDATE transactions SET ignored = ? WHERE id = ?",
-                        (new_state, transaction_id)
-                    )
+                for date, amount, description, category, transaction_type, _ in transaction_states:
+                    cursor.execute("""
+                        UPDATE transactions 
+                        SET ignored = ? 
+                        WHERE date = ? 
+                        AND amount = ? 
+                        AND description = ? 
+                        AND category = ? 
+                        AND transaction_type = ?
+                    """, (
+                        new_state,
+                        date.strftime("%Y-%m-%dT%H:%M:%S"),  # Convert datetime to string
+                        str(amount),  # Convert Decimal to string
+                        description,
+                        category,
+                        transaction_type
+                    ))
                 
                 conn.commit()
             
             self._refresh_transactions()
-            messagebox.showinfo(
-                "Success",
-                f"Successfully {'hid' if new_state else 'unhid'} {len(selected_items)} transaction(s)"
+            
+        except Exception as e:
+            messagebox.showerror(
+                "Error",
+                f"Failed to update hidden status: {str(e)}"
             )
+    
+    def _toggle_single_transaction_ignored(self, item: str) -> None:
+        """Toggle the ignored status of a single transaction."""
+        try:
+            # Get transaction details from the treeview
+            values = self.tree.item(item)["values"]
+            if not values:
+                return
+            
+            date = datetime.strptime(values[0], "%Y-%m-%d")
+            amount = Decimal(values[1].replace("$", "").replace(",", ""))
+            description = values[2]
+            category = values[3]
+            transaction_type = values[4]
+            
+            # Get current state from database
+            with sqlite3.connect(self.db.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT ignored FROM transactions 
+                    WHERE date = ? 
+                    AND amount = ? 
+                    AND description = ? 
+                    AND category = ? 
+                    AND transaction_type = ?
+                """, (
+                    date.strftime("%Y-%m-%d"),
+                    amount,
+                    description,
+                    category,
+                    transaction_type
+                ))
+                result = cursor.fetchone()
+                if not result:
+                    raise ValueError("Transaction not found")
+                
+                current_state = bool(result[0])
+                new_state = not current_state
+                
+                # Show confirmation dialog
+                action_word = "hide" if new_state else "unhide"
+                if not messagebox.askyesno(
+                    "Confirm Toggle Hidden",
+                    f"Are you sure you want to {action_word} this transaction?\n\n"
+                    f"Note: Hidden transactions will be excluded from calculations and reports."
+                ):
+                    return
+                
+                # Update the transaction
+                cursor.execute("""
+                    UPDATE transactions 
+                    SET ignored = ? 
+                    WHERE date = ? 
+                    AND amount = ? 
+                    AND description = ? 
+                    AND category = ? 
+                    AND transaction_type = ?
+                """, (
+                    new_state,
+                    date.strftime("%Y-%m-%d"),
+                    amount,
+                    description,
+                    category,
+                    transaction_type
+                ))
+                conn.commit()
+            
+            self._refresh_transactions()
             
         except Exception as e:
             messagebox.showerror(
@@ -463,43 +572,33 @@ class MainWindow:
                 messagebox.showerror("Error", f"Failed to delete transaction: {str(e)}")
     
     def _refresh_transactions(self) -> None:
-        """Refresh the transaction list."""
+        """Refresh the transactions display."""
         # Clear existing items
         for item in self.tree.get_children():
             self.tree.delete(item)
-
-        # Get filtered transactions
-        transactions = self._get_filtered_transactions()
         
-        # Update category lists
-        categories = sorted(self.db.get_all_categories())
+        # Get transactions
+        transactions = self.db.get_transactions()
         
-        # Update both category dropdowns
-        self.bulk_category["values"] = categories
-        self.category_filter["values"] = ["All"] + categories
-        
-        # Set default values if not already set
-        if not self.category_filter.get():
-            self.category_filter.set("All")
-        if not self.bulk_category.get() and categories:
-            self.bulk_category.set(categories[0])
-
         # Add transactions to tree
         for transaction in transactions:
-            # Set eye icon based on ignored status
-            eye_icon = "👁" if not transaction.ignored else "🚫"
+            # Skip hidden transactions if show_hidden is False
+            if transaction.ignored and not self.show_hidden_var.get():
+                continue
             
             values = (
                 transaction.date.strftime("%Y-%m-%d"),
-                transaction.id,
                 f"${transaction.amount:,.2f}",
                 transaction.description,
                 transaction.category,
-                transaction.transaction_type,
-                f"{eye_icon} 🗑",  # Actions column with both icons
-                "Yes" if transaction.ignored else "No"
+                transaction.transaction_type
             )
-            self.tree.insert("", "end", values=values)
+            # Insert the item and get its ID
+            item_id = self.tree.insert("", "end", values=values)
+            
+            # If the transaction is ignored, add the "hidden" tag
+            if transaction.ignored:
+                self.tree.item(item_id, tags=("hidden",))
     
     def _clear_inputs(self) -> None:
         """Clear all input fields."""
@@ -510,65 +609,33 @@ class MainWindow:
     def _apply_filters(self) -> None:
         """Apply all filters to the transactions view."""
         try:
-            transactions = self.db.get_transactions()
-            filtered_transactions = []
+            # Clear existing items
+            for item in self.tree.get_children():
+                self.tree.delete(item)
             
-            # Get filter values
-            start_date = None
-            end_date = None
-            if self.start_date.get().strip():
-                start_date = datetime.strptime(self.start_date.get().strip(), "%Y-%m-%d")
-            if self.end_date.get().strip():
-                end_date = datetime.strptime(self.end_date.get().strip(), "%Y-%m-%d")
+            # Get filtered transactions
+            filtered_transactions = self._get_filtered_transactions()
             
-            # Parse amount filters
-            min_amount = None
-            max_amount = None
-            if self.min_amount.get().strip():
-                min_amount = Decimal(self.min_amount.get().strip())
-            if self.max_amount.get().strip():
-                max_amount = Decimal(self.max_amount.get().strip())
-            
-            # Get other filter values
-            desc_filter = self.desc_filter.get().strip().lower()
-            category_filter = self.category_filter.get()
-            type_filter = self.type_filter.get()
-            
-            # Apply filters
-            for transaction in transactions:
-                # Date filter
-                if start_date and transaction.date < start_date:
-                    continue
-                if end_date and transaction.date > end_date:
+            # Add filtered transactions to tree
+            for transaction in filtered_transactions:
+                # Skip hidden transactions if show_hidden is False
+                if transaction.ignored and not self.show_hidden_var.get():
                     continue
                 
-                # Amount filter
-                if min_amount is not None and transaction.amount < min_amount:
-                    continue
-                if max_amount is not None and transaction.amount > max_amount:
-                    continue
+                values = (
+                    transaction.date.strftime("%Y-%m-%d"),
+                    f"${transaction.amount:,.2f}",
+                    transaction.description,
+                    transaction.category,
+                    transaction.transaction_type
+                )
+                # Insert the item and get its ID
+                item_id = self.tree.insert("", "end", values=values)
                 
-                # Description filter
-                if desc_filter and desc_filter not in transaction.description.lower():
-                    continue
+                # If the transaction is ignored, add the "hidden" tag
+                if transaction.ignored:
+                    self.tree.item(item_id, tags=("hidden",))
                 
-                # Category filter
-                if category_filter != "All":
-                    if category_filter == "":  # Empty category filter
-                        if transaction.category and transaction.category.strip() != "" and transaction.category != "Uncategorized":
-                            continue
-                    elif transaction.category != category_filter:
-                        continue
-                
-                # Type filter
-                if type_filter != "All" and transaction.transaction_type.lower() != type_filter.lower():
-                    continue
-                
-                filtered_transactions.append(transaction)
-            
-            # Update the tree with filtered transactions
-            self._refresh_transactions()
-            
         except ValueError as e:
             messagebox.showerror("Error", f"Invalid filter value: {str(e)}")
     
@@ -597,7 +664,7 @@ class MainWindow:
                 "Please select one or more transactions to update."
             )
             return
-
+        
         new_category = self.bulk_category.get().strip()
         if not new_category:
             messagebox.showwarning(
@@ -609,8 +676,20 @@ class MainWindow:
         try:
             # Update each selected transaction
             for item_id in selected_items:
-                transaction_id = self.tree.item(item_id)["values"][1]  # ID is second column
-                self.db.update_transaction_category(transaction_id, new_category)
+                values = self.tree.item(item_id)["values"]
+                date = datetime.strptime(values[0], "%Y-%m-%d")
+                amount = Decimal(values[1].replace("$", "").replace(",", ""))
+                description = values[2]
+                transaction_type = values[4]
+                
+                # Find and update the matching transaction
+                self.db.update_transaction_by_attributes(
+                    date=date,
+                    amount=amount,
+                    description=description,
+                    category=new_category,
+                    transaction_type=transaction_type
+                )
             
             # Refresh the display
             self._refresh_transactions()
@@ -644,13 +723,28 @@ class MainWindow:
             f"Are you sure you want to delete {len(selected_items)} transaction(s)?"
         ):
             try:
-                # Delete each selected transaction
+                # Get the transactions from the database based on their values
                 for item_id in selected_items:
-                    transaction_id = self.tree.item(item_id)["values"][1]  # ID is second column
-                    self.db.delete_transaction(transaction_id)
+                    values = self.tree.item(item_id)["values"]
+                    # Get values directly from the tree
+                    date_str = f"{values[0]}T00:00:00"  # Add time component to match database format
+                    amount = Decimal(values[1].replace("$", "").replace(",", ""))
+                    description = values[2]
+                    category = values[3]
+                    transaction_type = values[4]
+                    
+                    # Find and delete the matching transaction
+                    self.db.delete_transaction_by_attributes(
+                        date=date_str,
+                        amount=str(amount),
+                        description=description,
+                        category=category,
+                        transaction_type=transaction_type
+                    )
                 
                 # Refresh the display
                 self._refresh_transactions()
+                
             except Exception as e:
                 messagebox.showerror(
                     "Error",
