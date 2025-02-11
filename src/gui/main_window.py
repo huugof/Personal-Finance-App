@@ -976,34 +976,112 @@ class MainWindow:
         amount = Decimal(values[1].replace("$", "").replace(",", ""))  # Amount is at index 1
         current_category = values[3]  # Category is at index 3
         
-        # Get all available categories from the database
-        categories = self.db.get_all_categories()
+        # Find similar transactions before showing the dialog
+        similar_items = []
+        SIMILARITY_THRESHOLD = 0.8  # 80% similarity threshold
+        
+        for item in self.tree.get_children():
+            item_values = self.tree.item(item)["values"]
+            item_desc = item_values[2]
+            item_category = item_values[3]
+            
+            # Calculate similarity ratio
+            desc1 = description.lower()
+            desc2 = item_desc.lower()
+            max_len = max(len(desc1), len(desc2))
+            if max_len == 0:
+                continue
+                
+            # Find the longest common substring
+            common = 0
+            for i in range(min(len(desc1), len(desc2))):
+                if desc1[i] == desc2[i]:
+                    common += 1
+            similarity = common / max_len
+            
+            # Check if description is similar and transaction is uncategorized
+            if similarity >= SIMILARITY_THRESHOLD and item_category == "Uncategorized" and item != selection[0]:
+                similar_items.append(item)
+        
+        # Get suggested category from AI
+        suggested_category = self.db.ai_handler.suggest_category(description, amount)
         
         # First dialog: Category selection
         category_dialog = tk.Toplevel(self.root)
-        category_dialog.title("Select Category")
-        category_dialog.geometry("300x150")
+        category_dialog.title("Auto-Categorize Transaction")
+        category_dialog.geometry("600x400")
+        
+        # Make it a true modal dialog
         category_dialog.transient(self.root)
         category_dialog.grab_set()
+        category_dialog.focus_set()
+        category_dialog.resizable(False, False)
         
-        # Create main frame with padding
-        cat_frame = ttk.Frame(category_dialog, padding="10")
+        # Center the dialog
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (600 // 2)
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (400 // 2)
+        category_dialog.geometry(f"+{x}+{y}")
+        
+        # Create main frame with minimal padding
+        cat_frame = ttk.Frame(category_dialog, padding="2")
         cat_frame.pack(fill="both", expand=True)
         
-        # Add description label
+        # Transaction details frame
+        details_frame = ttk.LabelFrame(cat_frame, text="Transaction Details", padding="1")
+        details_frame.pack(fill="x", pady=1)
+        
+        # Description
         desc_label = ttk.Label(
-            cat_frame, 
-            text=f"Transaction: {description}\nAmount: ${amount:,.2f}",
+            details_frame, 
+            text=f"Description: {description} {values[4]}",
             justify="left",
-            wraplength=280
+            wraplength=560
         )
-        desc_label.pack(pady=5)
+        desc_label.pack(pady=1, padx=1, anchor="w")
+        
+        # Amount
+        amount_label = ttk.Label(
+            details_frame,
+            text=f"Amount: ${amount:,.2f}",
+            justify="left"
+        )
+        amount_label.pack(pady=1, padx=1, anchor="w")
+        
+        # Similar transactions count
+        similar_count = len(similar_items)
+        if similar_count > 0:
+            similar_label = ttk.Label(
+                details_frame,
+                text=f"Similar uncategorized transactions found: {similar_count}",
+                justify="left",
+                foreground="blue"
+            )
+            similar_label.pack(pady=1, padx=1, anchor="w")
+        
+        # Category Information frame
+        category_frame = ttk.LabelFrame(cat_frame, text="Category Information", padding="1")
+        category_frame.pack(fill="x", pady=1)
+        
+        # Current and suggested categories
+        category_info = ttk.Label(
+            category_frame,
+            text=f"Current Category: {current_category}\nSuggested Category: {suggested_category}",
+            justify="left"
+        )
+        category_info.pack(pady=1, padx=1, anchor="w")
+        
+        # Selection frame
+        selection_frame = ttk.LabelFrame(cat_frame, text="Select Category", padding="1")
+        selection_frame.pack(fill="x", pady=1)
         
         # Category selection
-        ttk.Label(cat_frame, text="Category:").pack(pady=2)
-        category_combo = ttk.Combobox(cat_frame, values=categories, width=30)
-        category_combo.pack(pady=2)
-        category_combo.set(current_category)
+        category_combo = ttk.Combobox(
+            selection_frame, 
+            values=sorted(self.db.get_all_categories()), 
+            width=50
+        )
+        category_combo.pack(pady=1, padx=1)
+        category_combo.set(suggested_category)
         
         def on_category_selected():
             selected_category = category_combo.get().strip()
@@ -1013,86 +1091,115 @@ class MainWindow:
             
             category_dialog.destroy()
             
-            # Update transaction category
-            if selected_category != current_category:
+            # Update selected transaction and similar transactions
+            transactions_to_update = [selection[0]] + similar_items
+            for item in transactions_to_update:
+                item_values = self.tree.item(item)["values"]
                 self.db.update_transaction_by_attributes(
-                    date=datetime.strptime(values[0], "%Y-%m-%d"),
-                    amount=amount,
-                    description=description,
+                    date=datetime.strptime(item_values[0], "%Y-%m-%d"),
+                    amount=Decimal(item_values[1].replace("$", "").replace(",", "")),
+                    description=item_values[2],
                     category=selected_category,
-                    transaction_type=values[4]
+                    transaction_type=item_values[4]
                 )
-                self._refresh_transactions()
-                
-                # Ask if user wants to create a rule
-                if messagebox.askyesno(
-                    "Create Rule",
-                    f"Do you want to create a rule to automatically categorize similar transactions as '{selected_category}'?"
-                ):
-                    # Show rule creation dialog
-                    self._show_rule_dialog(description, selected_category, amount, values)
-        
-        def on_cancel():
-            category_dialog.destroy()
+            
+            self._refresh_transactions()
+            
+            if len(transactions_to_update) > 1:
+                messagebox.showinfo(
+                    "Success",
+                    f"Updated {len(transactions_to_update)} transactions to category: {selected_category}"
+                )
+            
+            # Ask about creating a rule
+            if messagebox.askyesno(
+                "Create Rule",
+                f"Do you want to create a rule to automatically categorize similar transactions as '{selected_category}'?"
+            ):
+                self._show_rule_dialog(description, selected_category, amount, values)
         
         # Button frame
         button_frame = ttk.Frame(cat_frame)
-        button_frame.pack(pady=10)
+        button_frame.pack(pady=2)
         
-        ttk.Button(button_frame, text="Apply", command=on_category_selected).pack(side="left", padx=5)
-        ttk.Button(button_frame, text="Cancel", command=on_cancel).pack(side="left", padx=5)
+        ttk.Button(button_frame, text="Apply", command=on_category_selected).pack(side="left", padx=2)
+        ttk.Button(button_frame, text="Cancel", command=category_dialog.destroy).pack(side="left", padx=2)
+        
+        # Handle window close button
+        category_dialog.protocol("WM_DELETE_WINDOW", category_dialog.destroy)
+        
+        # Wait for the dialog to be closed before continuing
+        self.root.wait_window(category_dialog)
 
     def _show_rule_dialog(self, description: str, category: str, amount: Decimal, values: tuple) -> None:
         """Show dialog for creating a categorization rule."""
-        # Create a dialog to edit rule
         dialog = tk.Toplevel(self.root)
         dialog.title("Create Categorization Rule")
-        dialog.geometry("400x300")
+        dialog.geometry("600x400")
+        
+        # Make it a true modal dialog
         dialog.transient(self.root)
         dialog.grab_set()
+        dialog.focus_set()
+        dialog.resizable(False, False)
         
-        # Create main frame with padding
-        main_frame = ttk.Frame(dialog, padding="10")
+        # Center the dialog
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (600 // 2)
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (400 // 2)
+        dialog.geometry(f"+{x}+{y}")
+        
+        # Create main frame with minimal padding
+        main_frame = ttk.Frame(dialog, padding="2")
         main_frame.pack(fill="both", expand=True)
         
-        # Pattern
-        ttk.Label(main_frame, text="Pattern:").grid(row=0, column=0, sticky="w", pady=5)
-        pattern_entry = ttk.Entry(main_frame, width=40)
-        pattern_entry.grid(row=0, column=1, columnspan=2, sticky="ew", pady=5)
+        # Pattern frame
+        pattern_frame = ttk.LabelFrame(main_frame, text="Match Pattern", padding="1")
+        pattern_frame.pack(fill="x", pady=1)
+        
+        pattern_entry = ttk.Entry(pattern_frame, width=50)
+        pattern_entry.pack(pady=1, padx=1)
         pattern_entry.insert(0, description)
         
-        # Category (disabled since we already selected it)
-        ttk.Label(main_frame, text="Category:").grid(row=1, column=0, sticky="w", pady=5)
+        # Category frame
+        category_frame = ttk.LabelFrame(main_frame, text="Category", padding="1")
+        category_frame.pack(fill="x", pady=1)
+        
         category_var = tk.StringVar(value=category)
-        category_entry = ttk.Entry(main_frame, textvariable=category_var, width=40, state="readonly")
-        category_entry.grid(row=1, column=1, columnspan=2, sticky="ew", pady=5)
+        category_entry = ttk.Entry(category_frame, textvariable=category_var, width=50, state="readonly")
+        category_entry.pack(pady=1, padx=1)
         
-        # Amount
-        ttk.Label(main_frame, text="Amount:").grid(row=2, column=0, sticky="w", pady=5)
+        # Amount frame
+        amount_frame = ttk.LabelFrame(main_frame, text="Amount Details", padding="1")
+        amount_frame.pack(fill="x", pady=1)
+        
         amount_var = tk.StringVar(value=str(amount))
-        amount_entry = ttk.Entry(main_frame, textvariable=amount_var, width=40)
-        amount_entry.grid(row=2, column=1, columnspan=2, sticky="ew", pady=5)
+        amount_entry = ttk.Entry(amount_frame, textvariable=amount_var, width=50)
+        amount_entry.pack(pady=1, padx=1)
         
-        # Tolerance
-        ttk.Label(main_frame, text="Tolerance (±):").grid(row=3, column=0, sticky="w", pady=5)
+        tolerance_label = ttk.Label(amount_frame, text="Tolerance (±):")
+        tolerance_label.pack(padx=1, anchor="w")
         tolerance_var = tk.StringVar(value="0.01")
-        tolerance_entry = ttk.Entry(main_frame, textvariable=tolerance_var, width=40)
-        tolerance_entry.grid(row=3, column=1, columnspan=2, sticky="ew", pady=5)
+        tolerance_entry = ttk.Entry(amount_frame, textvariable=tolerance_var, width=50)
+        tolerance_entry.pack(pady=1, padx=1)
         
-        # Priority
-        ttk.Label(main_frame, text="Priority:").grid(row=4, column=0, sticky="w", pady=5)
+        # Priority frame
+        priority_frame = ttk.LabelFrame(main_frame, text="Priority", padding="1")
+        priority_frame.pack(fill="x", pady=1)
+        
         priority_var = tk.StringVar(value="0")
-        priority_entry = ttk.Entry(main_frame, textvariable=priority_var, width=40)
-        priority_entry.grid(row=4, column=1, columnspan=2, sticky="ew", pady=5)
+        priority_entry = ttk.Entry(priority_frame, textvariable=priority_var, width=50)
+        priority_entry.pack(pady=1, padx=1)
         
-        # Help text
+        # Help frame
+        help_frame = ttk.LabelFrame(main_frame, text="Help", padding="1")
+        help_frame.pack(fill="x", pady=1)
+        
         help_text = ttk.Label(
-            main_frame, 
+            help_frame,
             text="Higher priority rules are applied first.\nLeave amount blank to match any amount.",
-            justify="left",
-            wraplength=350
+            justify="left"
         )
-        help_text.grid(row=5, column=0, columnspan=3, sticky="w", pady=10)
+        help_text.pack(pady=1, padx=1, anchor="w")
         
         def on_submit():
             try:
@@ -1137,10 +1244,16 @@ class MainWindow:
         
         # Button frame
         button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=6, column=0, columnspan=3, pady=10)
+        button_frame.pack(pady=2)
         
-        ttk.Button(button_frame, text="Create Rule", command=on_submit).pack(side="left", padx=5)
-        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side="left", padx=5)
+        ttk.Button(button_frame, text="Create Rule", command=on_submit).pack(side="left", padx=2)
+        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side="left", padx=2)
+        
+        # Handle window close button
+        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+        
+        # Wait for the dialog to be closed before continuing
+        self.root.wait_window(dialog)
     
     def _auto_categorize_uncategorized(self) -> None:
         """Use AI to suggest categories for all uncategorized transactions."""
