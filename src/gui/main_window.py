@@ -18,11 +18,20 @@ class MainWindow:
     
     def __init__(self, db: Database):
         """Initialize the main window."""
+        self.db = db
         self.root = tk.Tk()
         self.root.title("Budget Tracker")
         self.root.geometry("1200x1300")  # Increased height from 600 to 800
         self.root.minsize(1200, 800)    # Increased minimum height from 600 to 800
-        self.db = db
+        
+        # Add debug logging
+        print("\n=== MainWindow Initialization ===")
+        print("Checking database connection...")
+        transactions = self.db.get_transactions()
+        print(f"Found {len(transactions)} transactions")
+        if transactions:
+            print("Sample transaction:", vars(transactions[0]))
+        print("==============================\n")
         
         # Create main container with PanedWindow
         self.main_paned = ttk.PanedWindow(self.root, orient="horizontal")
@@ -79,6 +88,8 @@ class MainWindow:
         
         # Bind the TransactionsChanged event
         self.root.bind("<<TransactionsChanged>>", lambda e: self._refresh_transactions())
+        
+        self._refresh_transactions()  # Move this line here, inside __init__
     
     def _setup_main_tab(self) -> None:
         """Set up the main transaction tab UI."""
@@ -139,6 +150,10 @@ class MainWindow:
         # Filter Frame
         filter_frame = ttk.LabelFrame(self.main_tab, text="Search & Filter")
         filter_frame.pack(fill="x", padx=10, pady=5)
+        
+        # Add transaction counter label at the top of filter frame
+        self.transaction_counter = ttk.Label(filter_frame, text="Showing 0 transactions")
+        self.transaction_counter.pack(fill="x", padx=5, pady=2)
         
         # Date Range
         date_frame = ttk.Frame(filter_frame)
@@ -279,6 +294,22 @@ class MainWindow:
         
         # Initial refresh of transactions
         self._refresh_transactions()
+        
+        # Add AI Assistant button
+        ai_frame = ttk.LabelFrame(self.main_tab, text="AI Assistant")
+        ai_frame.pack(fill="x", padx=10, pady=5)
+        
+        ttk.Button(
+            ai_frame,
+            text="Auto-Categorize Selected",
+            command=self._auto_categorize_selected
+        ).pack(side="left", padx=5)
+        
+        ttk.Button(
+            ai_frame,
+            text="Auto-Categorize All Uncategorized",
+            command=self._auto_categorize_uncategorized
+        ).pack(side="left", padx=5)
     
     def _setup_tree(self) -> None:
         """Set up the transaction treeview."""
@@ -576,17 +607,25 @@ class MainWindow:
     
     def _refresh_transactions(self) -> None:
         """Refresh the transactions display."""
+        print("\n=== Refreshing Transactions ===")
+        
         # Clear existing items
         for item in self.tree.get_children():
             self.tree.delete(item)
         
         # Get transactions
         transactions = self.db.get_transactions()
+        print(f"Retrieved {len(transactions)} transactions from database")
+        
+        # Counter for visible transactions
+        visible_count = 0
         
         # Add transactions to tree
         for transaction in transactions:
+            print(f"Processing transaction: {vars(transaction)}")
             # Skip hidden transactions if show_hidden is False
             if transaction.ignored and not self.show_hidden_var.get():
+                print("Skipping hidden transaction")
                 continue
             
             values = (
@@ -598,10 +637,14 @@ class MainWindow:
             )
             # Insert the item and get its ID
             item_id = self.tree.insert("", "end", values=values)
+            visible_count += 1
             
             # If the transaction is ignored, add the "hidden" tag
             if transaction.ignored:
                 self.tree.item(item_id, tags=("hidden",))
+        
+        print(f"Added {visible_count} visible transactions to tree")
+        print("===============================\n")
     
     def _clear_inputs(self) -> None:
         """Clear all input fields."""
@@ -619,6 +662,9 @@ class MainWindow:
             # Get filtered transactions
             filtered_transactions = self._get_filtered_transactions()
             
+            # Counter for visible transactions
+            visible_count = 0
+            
             # Add filtered transactions to tree
             for transaction in filtered_transactions:
                 # Skip hidden transactions if show_hidden is False
@@ -634,11 +680,19 @@ class MainWindow:
                 )
                 # Insert the item and get its ID
                 item_id = self.tree.insert("", "end", values=values)
+                visible_count += 1
                 
                 # If the transaction is ignored, add the "hidden" tag
                 if transaction.ignored:
                     self.tree.item(item_id, tags=("hidden",))
-                
+            
+            # Update the transaction counter
+            total = len(self.db.get_transactions())
+            if visible_count == total:
+                self.transaction_counter.config(text=f"Showing all {visible_count} transactions")
+            else:
+                self.transaction_counter.config(text=f"Showing {visible_count} of {total} transactions")
+            
         except ValueError as e:
             messagebox.showerror("Error", f"Invalid filter value: {str(e)}")
     
@@ -907,6 +961,223 @@ class MainWindow:
             return False
 
         return True
+    
+    def _auto_categorize_selected(self) -> None:
+        """Auto-categorize selected transactions."""
+        selection = self.tree.selection()
+        if not selection:
+            return
+        
+        # Get selected transaction details
+        item = self.tree.item(selection[0])
+        values = item["values"]
+        
+        description = values[2]  # Description is at index 2
+        amount = Decimal(values[1].replace("$", "").replace(",", ""))  # Amount is at index 1
+        current_category = values[3]  # Category is at index 3
+        
+        # Get all available categories from the database
+        categories = self.db.get_all_categories()
+        
+        # First dialog: Category selection
+        category_dialog = tk.Toplevel(self.root)
+        category_dialog.title("Select Category")
+        category_dialog.geometry("300x150")
+        category_dialog.transient(self.root)
+        category_dialog.grab_set()
+        
+        # Create main frame with padding
+        cat_frame = ttk.Frame(category_dialog, padding="10")
+        cat_frame.pack(fill="both", expand=True)
+        
+        # Add description label
+        desc_label = ttk.Label(
+            cat_frame, 
+            text=f"Transaction: {description}\nAmount: ${amount:,.2f}",
+            justify="left",
+            wraplength=280
+        )
+        desc_label.pack(pady=5)
+        
+        # Category selection
+        ttk.Label(cat_frame, text="Category:").pack(pady=2)
+        category_combo = ttk.Combobox(cat_frame, values=categories, width=30)
+        category_combo.pack(pady=2)
+        category_combo.set(current_category)
+        
+        def on_category_selected():
+            selected_category = category_combo.get().strip()
+            if not selected_category:
+                messagebox.showerror("Error", "Please select a category")
+                return
+            
+            category_dialog.destroy()
+            
+            # Update transaction category
+            if selected_category != current_category:
+                self.db.update_transaction_by_attributes(
+                    date=datetime.strptime(values[0], "%Y-%m-%d"),
+                    amount=amount,
+                    description=description,
+                    category=selected_category,
+                    transaction_type=values[4]
+                )
+                self._refresh_transactions()
+                
+                # Ask if user wants to create a rule
+                if messagebox.askyesno(
+                    "Create Rule",
+                    f"Do you want to create a rule to automatically categorize similar transactions as '{selected_category}'?"
+                ):
+                    # Show rule creation dialog
+                    self._show_rule_dialog(description, selected_category, amount, values)
+        
+        def on_cancel():
+            category_dialog.destroy()
+        
+        # Button frame
+        button_frame = ttk.Frame(cat_frame)
+        button_frame.pack(pady=10)
+        
+        ttk.Button(button_frame, text="Apply", command=on_category_selected).pack(side="left", padx=5)
+        ttk.Button(button_frame, text="Cancel", command=on_cancel).pack(side="left", padx=5)
+
+    def _show_rule_dialog(self, description: str, category: str, amount: Decimal, values: tuple) -> None:
+        """Show dialog for creating a categorization rule."""
+        # Create a dialog to edit rule
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Create Categorization Rule")
+        dialog.geometry("400x300")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Create main frame with padding
+        main_frame = ttk.Frame(dialog, padding="10")
+        main_frame.pack(fill="both", expand=True)
+        
+        # Pattern
+        ttk.Label(main_frame, text="Pattern:").grid(row=0, column=0, sticky="w", pady=5)
+        pattern_entry = ttk.Entry(main_frame, width=40)
+        pattern_entry.grid(row=0, column=1, columnspan=2, sticky="ew", pady=5)
+        pattern_entry.insert(0, description)
+        
+        # Category (disabled since we already selected it)
+        ttk.Label(main_frame, text="Category:").grid(row=1, column=0, sticky="w", pady=5)
+        category_var = tk.StringVar(value=category)
+        category_entry = ttk.Entry(main_frame, textvariable=category_var, width=40, state="readonly")
+        category_entry.grid(row=1, column=1, columnspan=2, sticky="ew", pady=5)
+        
+        # Amount
+        ttk.Label(main_frame, text="Amount:").grid(row=2, column=0, sticky="w", pady=5)
+        amount_var = tk.StringVar(value=str(amount))
+        amount_entry = ttk.Entry(main_frame, textvariable=amount_var, width=40)
+        amount_entry.grid(row=2, column=1, columnspan=2, sticky="ew", pady=5)
+        
+        # Tolerance
+        ttk.Label(main_frame, text="Tolerance (±):").grid(row=3, column=0, sticky="w", pady=5)
+        tolerance_var = tk.StringVar(value="0.01")
+        tolerance_entry = ttk.Entry(main_frame, textvariable=tolerance_var, width=40)
+        tolerance_entry.grid(row=3, column=1, columnspan=2, sticky="ew", pady=5)
+        
+        # Priority
+        ttk.Label(main_frame, text="Priority:").grid(row=4, column=0, sticky="w", pady=5)
+        priority_var = tk.StringVar(value="0")
+        priority_entry = ttk.Entry(main_frame, textvariable=priority_var, width=40)
+        priority_entry.grid(row=4, column=1, columnspan=2, sticky="ew", pady=5)
+        
+        # Help text
+        help_text = ttk.Label(
+            main_frame, 
+            text="Higher priority rules are applied first.\nLeave amount blank to match any amount.",
+            justify="left",
+            wraplength=350
+        )
+        help_text.grid(row=5, column=0, columnspan=3, sticky="w", pady=10)
+        
+        def on_submit():
+            try:
+                pattern = pattern_entry.get().strip()
+                entered_amount = amount_entry.get().strip()
+                entered_tolerance = tolerance_entry.get().strip()
+                entered_priority = priority_entry.get().strip()
+                
+                # Validate inputs
+                if not pattern:
+                    messagebox.showerror("Error", "Pattern is required")
+                    return
+                
+                # Convert amount and tolerance to strings or None
+                amount_str = str(Decimal(entered_amount)) if entered_amount else None
+                tolerance_str = str(Decimal(entered_tolerance)) if entered_tolerance else "0.01"
+                priority = int(entered_priority) if entered_priority else 0
+                
+                dialog.destroy()
+                
+                # Add rule
+                self.db.add_categorization_rule(
+                    pattern=pattern,
+                    category=category,
+                    amount=amount_str,
+                    tolerance=tolerance_str,
+                    priority=priority
+                )
+                
+                # Refresh displays
+                self._refresh_transactions()
+                if hasattr(self, "rules_window") and self.rules_window:
+                    self.rules_window._refresh_rules()
+                    
+                messagebox.showinfo("Success", "Rule created successfully")
+                
+            except (InvalidOperation, ValueError) as e:
+                messagebox.showerror("Error", f"Invalid input: {str(e)}")
+            except Exception as e:
+                print(f"Error creating rule: {str(e)}")
+                messagebox.showerror("Error", f"Failed to create rule: {str(e)}")
+        
+        # Button frame
+        button_frame = ttk.Frame(main_frame)
+        button_frame.grid(row=6, column=0, columnspan=3, pady=10)
+        
+        ttk.Button(button_frame, text="Create Rule", command=on_submit).pack(side="left", padx=5)
+        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side="left", padx=5)
+    
+    def _auto_categorize_uncategorized(self) -> None:
+        """Use AI to suggest categories for all uncategorized transactions."""
+        uncategorized = [
+            item for item in self.tree.get_children()
+            if self.tree.item(item)["values"][3] == "Uncategorized"
+        ]
+        
+        if not uncategorized:
+            messagebox.showinfo("Info", "No uncategorized transactions found")
+            return
+        
+        if not messagebox.askyesno(
+            "Confirm",
+            f"Auto-categorize {len(uncategorized)} uncategorized transactions?"
+        ):
+            return
+        
+        for item in uncategorized:
+            values = self.tree.item(item)["values"]
+            description = values[2]
+            amount = Decimal(values[1].replace("$", "").replace(",", ""))
+            
+            suggested_category = self.db.ai_handler.suggest_category(description, amount)
+            if suggested_category != "Uncategorized":
+                # Update in database using the correct method signature
+                self.db.update_transaction_by_attributes(
+                    date=datetime.strptime(values[0], "%Y-%m-%d"),
+                    amount=amount,
+                    description=description,
+                    category=suggested_category,
+                    transaction_type=values[4]  # Preserve the original transaction type
+                )
+                self.tree.set(item, "category", suggested_category)
+        
+        self._refresh_transactions()
+        messagebox.showinfo("Complete", "Auto-categorization complete!")
     
     def run(self) -> None:
         """Start the main event loop."""

@@ -7,9 +7,19 @@ from models.transaction import Transaction
 class Database:
     """Handles all database operations for the budget tracker."""
     
-    def __init__(self, db_path: str = "data/budget.db"):
-        """Initialize database connection and create tables if they don't exist."""
+    def __init__(self, db_path: str, api_key: Optional[str] = None):
+        """Initialize database connection and create tables if they don't exist.
+        
+        Args:
+            db_path: Path to the SQLite database file
+            api_key: Optional API key for AI services
+        """
         self.db_path = db_path
+        if api_key:
+            from services.ai_handler import AIHandler
+            self.ai_handler = AIHandler(api_key, self)
+        else:
+            self.ai_handler = None
         self._create_tables()
     
     def _create_tables(self) -> None:
@@ -17,35 +27,18 @@ class Database:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             
-            # Check if we need to update the categorization_rules table
-            cursor.execute("PRAGMA table_info(categorization_rules)")
-            columns = {col[1] for col in cursor.fetchall()}
+            # Create tables if they don't exist
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS categorization_rules (
+                    pattern TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    amount DECIMAL,
+                    amount_tolerance DECIMAL DEFAULT 0.01,
+                    priority INTEGER DEFAULT 0,
+                    PRIMARY KEY (pattern, category)
+                )
+            """)
             
-            if "amount" not in columns:
-                # Backup existing rules
-                cursor.execute("SELECT pattern, category, priority FROM categorization_rules")
-                existing_rules = cursor.fetchall()
-                
-                # Drop and recreate table
-                cursor.execute("DROP TABLE categorization_rules")
-                cursor.execute("""
-                    CREATE TABLE categorization_rules (
-                        pattern TEXT NOT NULL,
-                        category TEXT NOT NULL,
-                        amount DECIMAL,
-                        amount_tolerance DECIMAL DEFAULT 0.01,
-                        priority INTEGER DEFAULT 0,
-                        PRIMARY KEY (pattern, category)
-                    )
-                """)
-                
-                # Restore existing rules
-                cursor.executemany("""
-                    INSERT INTO categorization_rules (pattern, category, priority)
-                    VALUES (?, ?, ?)
-                """, existing_rules)
-            
-            # Create other tables if they don't exist
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS transactions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,6 +58,20 @@ class Database:
                     tags TEXT
                 )
             """)
+            
+            # Only check for table updates if the table exists
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='categorization_rules'")
+            if cursor.fetchone():
+                cursor.execute("PRAGMA table_info(categorization_rules)")
+                columns = {col[1] for col in cursor.fetchall()}
+                
+                # Add missing columns if needed
+                if "amount" not in columns:
+                    cursor.execute("ALTER TABLE categorization_rules ADD COLUMN amount DECIMAL")
+                if "amount_tolerance" not in columns:
+                    cursor.execute("ALTER TABLE categorization_rules ADD COLUMN amount_tolerance DECIMAL DEFAULT 0.01")
+                if "priority" not in columns:
+                    cursor.execute("ALTER TABLE categorization_rules ADD COLUMN priority INTEGER DEFAULT 0")
             
             conn.commit()
     
@@ -86,16 +93,41 @@ class Database:
     
     def get_transactions(self) -> List[Transaction]:
         """Get all transactions from the database."""
-        print("Debug: Fetching transactions from database")  # Debug print
+        print("\n=== DEBUG: Transaction Fetch ===")
+        print(f"Database path: {self.db_path}")
+        
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
+            
+            # First check if table exists
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='transactions'")
+            if not cursor.fetchone():
+                print("ERROR: transactions table does not exist!")
+                return []
+            
+            # Check table structure
+            cursor.execute("PRAGMA table_info(transactions)")
+            print("Table structure:", cursor.fetchall())
+            
+            # Get row count
+            cursor.execute("SELECT COUNT(*) FROM transactions")
+            count = cursor.fetchone()[0]
+            print(f"Total rows in table: {count}")
+            
+            # Get actual transactions
             cursor.execute("""
                 SELECT id, date, amount, description, category, transaction_type, ignored 
                 FROM transactions 
                 ORDER BY date DESC
             """)
             rows = cursor.fetchall()
-            print(f"Debug: Found {len(rows)} rows in database")  # Debug print
+            print(f"Fetched {len(rows)} transactions")
+            
+            if rows:
+                print("Sample first row:", rows[0])
+            
+            print("===========================\n")
+            
             return [
                 Transaction(
                     id=row[0],
@@ -176,32 +208,20 @@ class Database:
             print("=====================================\n")
 
     def set_category_tags(self, category: str, tags: str) -> None:
-        """Set or update tags for a category.
+        """Set tags for a category.
         
         Args:
             category: The category name
-            tags: Comma-separated tags
+            tags: Comma-separated list of tags
         """
-        print(f"Setting tags for {category}: {tags}")  # Debug log
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            
-            # First ensure the category exists with all fields
             cursor.execute("""
-                INSERT INTO categories (name, budget_goal, tags)
-                VALUES (?, NULL, ?)
-                ON CONFLICT(name) DO UPDATE SET 
-                tags = CASE 
-                    WHEN excluded.tags != '' THEN excluded.tags 
-                    ELSE categories.tags 
-                END
-            """, (category, tags))
+                INSERT INTO categories (name, tags)
+                VALUES (?, ?)
+                ON CONFLICT(name) DO UPDATE SET tags = ?
+            """, (category, tags, tags))
             conn.commit()
-            
-            # Debug verification
-            cursor.execute("SELECT tags FROM categories WHERE name = ?", (category,))
-            result = cursor.fetchone()
-            print(f"Verified tags for {category}: {result[0] if result else None}")  # Debug log
 
     def get_category_tags(self) -> Dict[str, str]:
         """Get all category tags.
@@ -209,14 +229,10 @@ class Database:
         Returns:
             Dict mapping category names to their tags
         """
-        print("Retrieving all category tags")  # Debug log
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            # Changed query to include all tags, even NULL ones
-            cursor.execute("SELECT name, COALESCE(tags, '') as tags FROM categories")
-            results = {row[0]: row[1] for row in cursor.fetchall() if row[1]}  # Only include non-empty tags
-            print(f"Retrieved tags: {results}")  # Debug log
-            return results
+            cursor.execute("SELECT name, tags FROM categories WHERE tags IS NOT NULL")
+            return {row[0]: row[1] for row in cursor.fetchall()}
 
     def add_category(self, category: str) -> None:
         """Add a new category to the database.
@@ -233,29 +249,16 @@ class Database:
             conn.commit()
 
     def get_all_categories(self) -> List[str]:
-        """Get all category names from the database.
-        
-        Returns:
-            List of category names sorted alphabetically
-        """
-        print("Debug: Fetching all categories")  # Debug print
+        """Get all unique categories from the database."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            
-            # Get categories from categories table
-            cursor.execute("SELECT DISTINCT name FROM categories WHERE name IS NOT NULL")
-            category_names = set(row[0] for row in cursor.fetchall())
-            
-            # Get categories from transactions table
-            cursor.execute("SELECT DISTINCT category FROM transactions WHERE category IS NOT NULL")
-            transaction_categories = set(row[0] for row in cursor.fetchall())
-            
-            # Combine both sets and remove empty strings
-            all_categories = category_names | transaction_categories
-            all_categories = {cat for cat in all_categories if cat and cat.strip()}
-            
-            print(f"Debug: Found categories: {all_categories}")  # Debug print
-            return sorted(all_categories)
+            cursor.execute("""
+                SELECT DISTINCT name FROM categories
+                UNION
+                SELECT DISTINCT category FROM transactions
+                WHERE category IS NOT NULL AND category != ''
+            """)
+            return [row[0] for row in cursor.fetchall()]
 
     def delete_category(self, category: str) -> None:
         """Delete a category from the database.

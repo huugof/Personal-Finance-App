@@ -1,5 +1,7 @@
 import tkinter as tk
+import sqlite3
 from tkinter import ttk, messagebox
+from decimal import Decimal, InvalidOperation
 from typing import Optional
 from database import Database
 
@@ -12,6 +14,9 @@ class RulesWindow:
         self.db = db
         self.is_collapsed = False
         self.EXPANDED_WIDTH = 300  # Constant for expanded width
+        
+        # Debug logging
+        print("\n=== RulesWindow Initialization ===")
         
         # Create the main frame
         self.frame = ttk.Frame(parent)
@@ -46,7 +51,43 @@ class RulesWindow:
         self.content_frame.pack(fill="both", expand=True)
         
         self._setup_ui()
+        self._verify_rules_table()  # Add verification after UI setup
         self._refresh_rules()
+        
+        print("==============================\n")
+    
+    def _verify_rules_table(self) -> None:
+        """Verify the rules table exists and contains data."""
+        try:
+            print("\nVerifying rules table...")
+            with sqlite3.connect(self.db.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Check if table exists
+                cursor.execute("""
+                    SELECT name FROM sqlite_master 
+                    WHERE type='table' AND name='categorization_rules'
+                """)
+                if not cursor.fetchone():
+                    print("Error: categorization_rules table does not exist!")
+                    return
+                
+                print("✓ categorization_rules table exists")
+                
+                # Count rules
+                cursor.execute("SELECT COUNT(*) FROM categorization_rules")
+                count = cursor.fetchone()[0]
+                print(f"Found {count} rules in database")
+                
+                # Show all rules
+                cursor.execute("SELECT * FROM categorization_rules")
+                rules = cursor.fetchall()
+                print("\nExisting rules in database:")
+                for rule in rules:
+                    print(f"  - {rule}")
+                
+        except Exception as e:
+            print(f"Database verification failed: {str(e)}")
     
     def _setup_ui(self) -> None:
         """Set up the UI components."""
@@ -154,57 +195,79 @@ class RulesWindow:
     
     def _add_rule(self) -> None:
         """Add a new categorization rule."""
-        pattern = self.pattern_entry.get().strip()
-        category = self.category_entry.get().strip()
-        
-        # Parse amount
-        amount: Optional[float] = None
-        amount_str = self.amount_entry.get().strip()
-        if amount_str:
-            try:
-                amount = float(amount_str)
-            except ValueError:
-                messagebox.showerror("Error", "Amount must be a valid number")
-                return
-        
-        # Parse tolerance
-        tolerance: Optional[float] = None
-        tolerance_str = self.tolerance_entry.get().strip()
-        if tolerance_str:
-            try:
-                tolerance = float(tolerance_str)
-            except ValueError:
-                messagebox.showerror("Error", "Tolerance must be a valid number")
-                return
-        
-        # Parse priority
         try:
-            priority = int(self.priority_entry.get().strip())
-        except ValueError:
-            messagebox.showerror("Error", "Priority must be a number")
-            return
-        
-        if not pattern or not category:
-            messagebox.showerror("Error", "Please fill in all required fields")
-            return
-        
-        self.db.add_categorization_rule(
-            pattern=pattern,
-            category=category,
-            priority=priority,
-            amount=amount,
-            tolerance=tolerance
-        )
-        self._refresh_rules()
-        
-        # Clear inputs
-        self.pattern_entry.delete(0, tk.END)
-        self.category_entry.delete(0, tk.END)
-        self.amount_entry.delete(0, tk.END)
-        self.tolerance_entry.delete(0, tk.END)
-        self.tolerance_entry.insert(0, "0.01")  # Reset to default
-        self.priority_entry.delete(0, tk.END)
-        self.priority_entry.insert(0, "0")  # Reset to default
+            # Get values from inputs
+            pattern = self.pattern_entry.get().strip()
+            category = self.category_entry.get().strip()
+            
+            # Validate required fields
+            if not pattern or not category:
+                messagebox.showerror("Error", "Pattern and category are required")
+                return
+            
+            # Parse amount and tolerance if provided
+            amount: Optional[str] = None  # Changed from Decimal to str
+            tolerance: Optional[str] = None  # Changed from Decimal to str
+            
+            if self.amount_entry.get().strip():
+                try:
+                    # Convert to Decimal for validation, then to string for storage
+                    amount = str(Decimal(self.amount_entry.get().strip()))
+                except InvalidOperation:
+                    messagebox.showerror("Error", "Invalid amount format")
+                    return
+            
+            if self.tolerance_entry.get().strip():
+                try:
+                    # Convert to Decimal for validation, then to string for storage
+                    tolerance = str(Decimal(self.tolerance_entry.get().strip()))
+                except InvalidOperation:
+                    messagebox.showerror("Error", "Invalid tolerance format")
+                    return
+            
+            # Get priority
+            try:
+                priority = int(self.priority_entry.get().strip() or "0")
+            except ValueError:
+                messagebox.showerror("Error", "Priority must be a number")
+                return
+            
+            print(f"\nAdding new rule:")
+            print(f"  Pattern: {pattern}")
+            print(f"  Category: {category}")
+            print(f"  Amount: {amount}")
+            print(f"  Tolerance: {tolerance}")
+            print(f"  Priority: {priority}")
+            
+            # Add rule to database with string values for amount and tolerance
+            self.db.add_categorization_rule(
+                pattern=pattern,
+                category=category,
+                amount=amount,  # Now a string or None
+                tolerance=tolerance,  # Now a string or None
+                priority=priority
+            )
+            
+            print("Rule added successfully")
+            
+            # Refresh display
+            self._refresh_rules()
+            
+            # Clear inputs
+            self.pattern_entry.delete(0, tk.END)
+            self.category_entry.delete(0, tk.END)
+            self.amount_entry.delete(0, tk.END)
+            self.tolerance_entry.delete(0, tk.END)
+            self.tolerance_entry.insert(0, "0.01")  # Reset to default
+            self.priority_entry.delete(0, tk.END)
+            self.priority_entry.insert(0, "0")  # Reset to default
+            
+            # Show success message
+            messagebox.showinfo("Success", "Rule added successfully")
+            
+        except Exception as e:
+            print(f"Error adding rule: {str(e)}")
+            messagebox.showerror("Error", f"Failed to add rule: {str(e)}")
     
     def _delete_rule(self) -> None:
         """Delete the selected categorization rule."""
@@ -232,13 +295,23 @@ class RulesWindow:
     
     def _refresh_rules(self) -> None:
         """Refresh the rules list."""
+        print("\nRefreshing rules display...")
+        
         # Clear existing items
         for item in self.tree.get_children():
             self.tree.delete(item)
+        
+        # Get and debug print rules
+        rules = self.db.get_categorization_rules()
+        print(f"Retrieved {len(rules)} rules from database:")
+        for rule in rules:
+            print(f"  - Pattern: {rule[0]}, Category: {rule[1]}, "
+                  f"Amount: {rule[2]}, Tolerance: {rule[3]}, Priority: {rule[4]}")
             
-        # Add current rules
-        for pattern, category, amount, tolerance, priority in self.db.get_categorization_rules():
-            self.tree.insert("", "end", values=(pattern, category, amount, tolerance, priority))
+            # Add to treeview
+            self.tree.insert("", "end", values=rule)
+        
+        print("Rules refresh complete")
     
     def _toggle_collapse(self) -> None:
         """Toggle the collapsed state of the rules panel."""
